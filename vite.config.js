@@ -78,7 +78,8 @@ function optimizePublicImages() {
 export default defineConfig(({ command }) => ({
   plugins: [vue(), tailwindcss(), command === 'build' ? optimizePublicImages() : null].filter(Boolean),
   server: {
-    allowedHosts: ['byzanedu.com'],
+    port: 5172,
+    allowedHosts: ['byzanedu.com','byzan.scagerwebsite.uk'],
   },
 }))
   
