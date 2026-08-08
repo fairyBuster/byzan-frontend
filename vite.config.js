@@ -14,7 +14,13 @@ function optimizePublicImages() {
     apply: 'build',
     async buildStart() {
       const fs = await import('node:fs/promises')
-      const sharp = (await import('sharp')).default
+      let sharp
+      try {
+        sharp = (await import('sharp')).default
+      } catch {
+        console.warn('[optimize-public-images] sharp not available, skipping image optimization')
+        return
+      }
 
       const root = path.resolve(__dirname, 'public', 'image')
 
