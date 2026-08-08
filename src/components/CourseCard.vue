@@ -3,9 +3,6 @@ import { Star } from "lucide-vue-next";
 import { computed } from "vue";
 import { RouterLink } from "vue-router";
 
-// Emits
-const emit = defineEmits(["buy-course"]);
-
 // Props
 const props = defineProps({
   course: {
@@ -103,13 +100,14 @@ const coursePrice = computed(() => {
           :class="course.is_free ? 'text-white bg-primary/70 rounded-lg al' : 'text-primary'"
           >{{ coursePrice }}</span
         >
-         <button 
+         <RouterLink
           v-if="!course.is_free"
+          :to="`/course/${course.id}`"
           class="bg-primary hover:bg-primary/90 font-semibold text-white px-2 py-1 rounded-lg text-sm transition-colors duration-200"
-          @click.stop="$emit('buy-course', course)"
+          @click.stop
         >
           Beli Course
-        </button>
+        </RouterLink>
       </div>
     </div>
     <!-- footer card  -->

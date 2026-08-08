@@ -8,6 +8,7 @@ import { getAssetUrl } from '../../utils/assets'
 import SuccessModal from '../../components/SuccessModal.vue'
 import ErrorModal from '../../components/ErrorModal.vue'
 import api from '../../services/api'
+import { buyFreeCourse, buyWithBalance, buyWithMidtrans } from '../../services/coursePayment'
 import { dummyCourses } from '../../data/dummyCourses.js'
 
 const route = useRoute()
@@ -53,6 +54,9 @@ const showReviewSuccess = ref(false)
 const showReviewError = ref(false)
 const reviewSuccessMessage = ref('')
 const reviewErrorMessage = ref('')
+const paymentMethod = ref(null) // 'balance' | 'midtrans'
+const showPaymentChoice = ref(false)
+const midtransLoading = ref(false)
 
 // Asset URLs
 const heroBgSrc = getAssetUrl('f72456441df4efd0eb5ecfda62f6b31c8d4550ef.png')
@@ -405,73 +409,112 @@ const showInfo = () => {
   console.log('Show course info')
 }
 
-const handleBuy = async () => {
+const isFreeCourse = computed(() => {
+  return course.value?.is_free || !Number(course.value?.price)
+})
+
+const handleBuy = () => {
   buyError.value = null
   buyResult.value = null
   showBuySuccess.value = false
   showBuyError.value = false
+  showPaymentChoice.value = false
   buySuccessMessage.value = ''
   buyErrorMessage.value = ''
+
   if (!isAuthenticated.value) {
     router.push({ name: 'login', query: { redirect: route.fullPath } })
     return
   }
+
   const courseId = route.params.id
   if (!courseId) {
     buyError.value = 'Course ID tidak ditemukan'
     return
   }
+
   if (isEnrolled.value) {
     return
   }
-  try {
-    buying.value = true
-    const cid = Number(courseId)
-    let data
-    try {
-      ;({ data } = await api.post('/courses/buy/balance/', { course_id: cid }))
-    } catch (e1) {
-      const status = e1?.response?.status
-      if (status && status >= 400 && status < 500) {
-        try {
-          ;({ data } = await api.post('/courses/buy/balance/', { id: cid }))
-        } catch (e2) {
-          if (e2?.response?.status && e2.response.status >= 400 && e2.response.status < 500) {
-            ;({ data } = await api.post('/courses/buy/balance/'))
-          } else {
-            throw e2
-          }
-        }
-      } else {
-        throw e1
-      }
-    }
 
-    buyResult.value = data || { status: 'success' }
+  // Decision tree: gratis vs berbayar
+  if (isFreeCourse.value) {
+    handleBuyFree()
+  } else {
+    showPaymentChoice.value = true
+  }
+}
+
+const handleBuyFree = async () => {
+  const courseId = Number(route.params.id)
+  buying.value = true
+  try {
+    const data = await buyFreeCourse(courseId)
+    buyResult.value = data
     isEnrolled.value = true
-    if (course.value) {
-      course.value.is_enrolled = true
-    }
-    buySuccessMessage.value = (course.value?.is_free || !Number(course.value?.price))
-      ? 'Enroll gratis berhasil.'
-      : 'Pembelian kursus berhasil.'
+    if (course.value) course.value.is_enrolled = true
+    buySuccessMessage.value = data?.message || `Berhasil enroll ke kursus "${course.value?.title || ''}"`
     showBuySuccess.value = true
+    showPaymentChoice.value = false
   } catch (e) {
-    const resData = e.response?.data
-    if (resData && typeof resData === 'object') {
-      const messages = Object.entries(resData)
-        .map(([k, v]) => Array.isArray(v) ? `${k}: ${v.join(', ')}` : `${k}: ${v}`)
-        .join(' | ')
-      buyError.value = messages
-    } else {
-      buyError.value = e.response?.data?.message || e.response?.data?.error || e.message || 'Gagal membeli/enroll course'
-    }
-    buyErrorMessage.value = buyError.value
-    showBuyError.value = true
-    console.error('Buy error:', e)
+    handleBuyError(e)
   } finally {
     buying.value = false
   }
+}
+
+const handleBuyBalance = async () => {
+  const courseId = Number(route.params.id)
+  buying.value = true
+  showPaymentChoice.value = false
+  try {
+    const data = await buyWithBalance(courseId)
+    buyResult.value = data
+    isEnrolled.value = true
+    if (course.value) course.value.is_enrolled = true
+    buySuccessMessage.value = data?.message || `Berhasil membeli kursus "${course.value?.title || ''}" dengan saldo`
+    showBuySuccess.value = true
+  } catch (e) {
+    handleBuyError(e)
+  } finally {
+    buying.value = false
+  }
+}
+
+const handleBuyMidtrans = async () => {
+  const courseId = Number(route.params.id)
+  midtransLoading.value = true
+  showPaymentChoice.value = false
+  try {
+    const data = await buyWithMidtrans(courseId)
+    const redirectUrl = data?.snap_redirect_url
+
+    if (!redirectUrl) {
+      throw new Error('Gagal mendapatkan URL pembayaran dari server')
+    }
+
+    // Redirect langsung ke halaman Midtrans
+    window.location.href = redirectUrl
+  } catch (e) {
+    handleBuyError(e)
+  } finally {
+    midtransLoading.value = false
+  }
+}
+
+const handleBuyError = (e) => {
+  const resData = e.response?.data
+  if (resData && typeof resData === 'object') {
+    const messages = Object.entries(resData)
+      .map(([k, v]) => Array.isArray(v) ? `${k}: ${v.join(', ')}` : `${k}: ${v}`)
+      .join(' | ')
+    buyError.value = messages
+  } else {
+    buyError.value = e.response?.data?.message || e.response?.data?.error || e.message || 'Gagal membeli/enroll course'
+  }
+  buyErrorMessage.value = buyError.value
+  showBuyError.value = true
+  console.error('Buy error:', e)
 }
 </script>
 
@@ -557,11 +600,29 @@ const handleBuy = async () => {
           </button>
           <button
             class="flex items-center justify-center h-[50px] min-w-[150px] px-4 bg-[#009444] text-white rounded-lg border-0 cursor-pointer font-['Montserrat'] font-semibold transition-opacity duration-200 hover:opacity-80 disabled:opacity-60 disabled:cursor-not-allowed"
-            :disabled="buying || isEnrolled"
+            :disabled="buying || midtransLoading || isEnrolled"
             @click="handleBuy"
-            :title="buying ? 'Memproses...' : (isEnrolled ? 'Sudah enroll' : ((course?.is_free || !Number(course?.price)) ? 'Enroll Gratis' : 'Beli (Saldo)'))"
+            :title="isEnrolled ? 'Sudah enroll' : (isFreeCourse ? 'Enroll Gratis' : 'Beli Course')"
           >
-            {{ isEnrolled ? 'Sudah Enroll' : ((course?.is_free || !Number(course?.price)) ? 'Enroll Gratis' : 'Beli (Saldo)') }}
+            {{ isEnrolled ? 'Sudah Enroll' : (isFreeCourse ? 'Enroll Gratis' : 'Beli Course') }}
+          </button>
+        </div>
+
+        <!-- Payment Method Choice (paid courses) -->
+        <div v-if="showPaymentChoice" class="flex flex-wrap items-center gap-3 md:gap-4 mt-3">
+          <button
+            class="flex items-center justify-center h-[44px] min-w-[160px] px-4 bg-[#009444] text-white rounded-lg border-0 cursor-pointer font-['Montserrat'] font-semibold transition-opacity duration-200 hover:opacity-80 disabled:opacity-60 disabled:cursor-not-allowed"
+            :disabled="buying"
+            @click="handleBuyBalance"
+          >
+            {{ buying ? 'Memproses...' : 'Beli dengan Saldo' }}
+          </button>
+          <button
+            class="flex items-center justify-center h-[44px] min-w-[160px] px-4 bg-[#0066cc] text-white rounded-lg border-0 cursor-pointer font-['Montserrat'] font-semibold transition-opacity duration-200 hover:opacity-80 disabled:opacity-60 disabled:cursor-not-allowed"
+            :disabled="midtransLoading"
+            @click="handleBuyMidtrans"
+          >
+            {{ midtransLoading ? 'Memproses...' : 'Beli via Transfer/VA' }}
           </button>
         </div>
 

@@ -86,6 +86,12 @@ export default defineConfig(({ command }) => ({
   server: {
     port: 5172,
     allowedHosts: ['byzanedu.com','byzan.scagerwebsite.uk'],
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8020',
+        changeOrigin: true,
+      },
+    },
   },
 }))
   

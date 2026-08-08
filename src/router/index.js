@@ -15,6 +15,7 @@ import ContentIndex from '../views/content/Index.vue'
 import ContentDetails from '../views/content/Details.vue'
 import AboutIndex from '../views/about/Index.vue'
 import CertificateVerify from '../views/certificates/Verify.vue'
+import PaymentSuccess from '../views/payment/Success.vue'
 
 const routes = [
   { path: '/', name: 'home', component: Home },
@@ -30,6 +31,7 @@ const routes = [
   { path: '/byzanpost/:id', name: 'byzanpost-details', component: ContentDetails },
   { path: '/about', name: 'about', component: AboutIndex },
   { path: '/certificates/verify/:code?', name: 'certificate-verify', component: CertificateVerify },
+  { path: '/payment/success', name: 'payment-success', component: PaymentSuccess, meta: { requiresAuth: true } },
 ]
 
 const router = createRouter({
