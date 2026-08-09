@@ -16,6 +16,7 @@ import ContentDetails from '../views/content/Details.vue'
 import AboutIndex from '../views/about/Index.vue'
 import CertificateVerify from '../views/certificates/Verify.vue'
 import PaymentSuccess from '../views/payment/Success.vue'
+import PaymentCheckout from '../views/payment/Checkout.vue'
 
 const routes = [
   { path: '/', name: 'home', component: Home },
@@ -32,6 +33,7 @@ const routes = [
   { path: '/about', name: 'about', component: AboutIndex },
   { path: '/certificates/verify/:code?', name: 'certificate-verify', component: CertificateVerify },
   { path: '/payment/success', name: 'payment-success', component: PaymentSuccess, meta: { requiresAuth: true } },
+  { path: '/payment/checkout/:courseId', name: 'payment-checkout', component: PaymentCheckout, meta: { requiresAuth: true } },
 ]
 
 const router = createRouter({

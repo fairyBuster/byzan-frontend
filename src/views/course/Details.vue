@@ -8,7 +8,7 @@ import { getAssetUrl } from '../../utils/assets'
 import SuccessModal from '../../components/SuccessModal.vue'
 import ErrorModal from '../../components/ErrorModal.vue'
 import api from '../../services/api'
-import { buyFreeCourse, buyWithBalance, buyWithMidtrans } from '../../services/coursePayment'
+import { buyFreeCourse } from '../../services/coursePayment'
 import { dummyCourses } from '../../data/dummyCourses.js'
 
 const route = useRoute()
@@ -54,9 +54,6 @@ const showReviewSuccess = ref(false)
 const showReviewError = ref(false)
 const reviewSuccessMessage = ref('')
 const reviewErrorMessage = ref('')
-const paymentMethod = ref(null) // 'balance' | 'midtrans'
-const showPaymentChoice = ref(false)
-const midtransLoading = ref(false)
 
 // Asset URLs
 const heroBgSrc = getAssetUrl('f72456441df4efd0eb5ecfda62f6b31c8d4550ef.png')
@@ -418,7 +415,6 @@ const handleBuy = () => {
   buyResult.value = null
   showBuySuccess.value = false
   showBuyError.value = false
-  showPaymentChoice.value = false
   buySuccessMessage.value = ''
   buyErrorMessage.value = ''
 
@@ -437,11 +433,11 @@ const handleBuy = () => {
     return
   }
 
-  // Decision tree: gratis vs berbayar
+  // Decision tree: gratis vs berbayar (ke halaman checkout)
   if (isFreeCourse.value) {
     handleBuyFree()
   } else {
-    showPaymentChoice.value = true
+    router.push({ name: 'payment-checkout', params: { courseId: route.params.id } })
   }
 }
 
@@ -455,50 +451,10 @@ const handleBuyFree = async () => {
     if (course.value) course.value.is_enrolled = true
     buySuccessMessage.value = data?.message || `Berhasil enroll ke kursus "${course.value?.title || ''}"`
     showBuySuccess.value = true
-    showPaymentChoice.value = false
   } catch (e) {
     handleBuyError(e)
   } finally {
     buying.value = false
-  }
-}
-
-const handleBuyBalance = async () => {
-  const courseId = Number(route.params.id)
-  buying.value = true
-  showPaymentChoice.value = false
-  try {
-    const data = await buyWithBalance(courseId)
-    buyResult.value = data
-    isEnrolled.value = true
-    if (course.value) course.value.is_enrolled = true
-    buySuccessMessage.value = data?.message || `Berhasil membeli kursus "${course.value?.title || ''}" dengan saldo`
-    showBuySuccess.value = true
-  } catch (e) {
-    handleBuyError(e)
-  } finally {
-    buying.value = false
-  }
-}
-
-const handleBuyMidtrans = async () => {
-  const courseId = Number(route.params.id)
-  midtransLoading.value = true
-  showPaymentChoice.value = false
-  try {
-    const data = await buyWithMidtrans(courseId)
-    const redirectUrl = data?.snap_redirect_url
-
-    if (!redirectUrl) {
-      throw new Error('Gagal mendapatkan URL pembayaran dari server')
-    }
-
-    // Redirect langsung ke halaman Midtrans
-    window.location.href = redirectUrl
-  } catch (e) {
-    handleBuyError(e)
-  } finally {
-    midtransLoading.value = false
   }
 }
 
@@ -600,29 +556,11 @@ const handleBuyError = (e) => {
           </button>
           <button
             class="flex items-center justify-center h-[50px] min-w-[150px] px-4 bg-[#009444] text-white rounded-lg border-0 cursor-pointer font-['Montserrat'] font-semibold transition-opacity duration-200 hover:opacity-80 disabled:opacity-60 disabled:cursor-not-allowed"
-            :disabled="buying || midtransLoading || isEnrolled"
+            :disabled="buying || isEnrolled"
             @click="handleBuy"
             :title="isEnrolled ? 'Sudah enroll' : (isFreeCourse ? 'Enroll Gratis' : 'Beli Course')"
           >
             {{ isEnrolled ? 'Sudah Enroll' : (isFreeCourse ? 'Enroll Gratis' : 'Beli Course') }}
-          </button>
-        </div>
-
-        <!-- Payment Method Choice (paid courses) -->
-        <div v-if="showPaymentChoice" class="flex flex-wrap items-center gap-3 md:gap-4 mt-3">
-          <button
-            class="flex items-center justify-center h-[44px] min-w-[160px] px-4 bg-[#009444] text-white rounded-lg border-0 cursor-pointer font-['Montserrat'] font-semibold transition-opacity duration-200 hover:opacity-80 disabled:opacity-60 disabled:cursor-not-allowed"
-            :disabled="buying"
-            @click="handleBuyBalance"
-          >
-            {{ buying ? 'Memproses...' : 'Beli dengan Saldo' }}
-          </button>
-          <button
-            class="flex items-center justify-center h-[44px] min-w-[160px] px-4 bg-[#0066cc] text-white rounded-lg border-0 cursor-pointer font-['Montserrat'] font-semibold transition-opacity duration-200 hover:opacity-80 disabled:opacity-60 disabled:cursor-not-allowed"
-            :disabled="midtransLoading"
-            @click="handleBuyMidtrans"
-          >
-            {{ midtransLoading ? 'Memproses...' : 'Beli via Transfer/VA' }}
           </button>
         </div>
 
