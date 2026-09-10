@@ -33,7 +33,7 @@ const routes = [
   { path: '/about', name: 'about', component: AboutIndex },
   { path: '/certificates/verify/:code?', name: 'certificate-verify', component: CertificateVerify },
   { path: '/payment/success', name: 'payment-success', component: PaymentSuccess, meta: { requiresAuth: true } },
-  { path: '/payment/checkout/:courseId', name: 'payment-checkout', component: PaymentCheckout, meta: { requiresAuth: true } },
+  { path: '/payment/checkout/:courseId', name: 'payment-checkout', component: PaymentCheckout },
 ]
 
 const router = createRouter({

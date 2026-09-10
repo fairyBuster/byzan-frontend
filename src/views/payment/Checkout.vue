@@ -1,25 +1,23 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppHeader from '../../components/AppHeader.vue'
 import AppFooter from '../../components/AppFooter.vue'
-import ErrorModal from '../../components/ErrorModal.vue'
 import { useAuthStore } from '../../stores/auth'
 import api from '../../services/api'
-import { buyWithMidtrans } from '../../services/coursePayment'
-import { getAssetUrl } from '../../utils/assets'
 
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 
+// Nomor WhatsApp admin Byzan (sama dengan FloatingChatWidget & footer)
+const WA_PHONE = '6285199111442'
+
 const course = ref(null)
 const loading = ref(true)
 const error = ref(null)
-const paying = ref(false)
-const payError = ref(null)
-const showPayError = ref(false)
-const payErrorMessage = ref('')
+const waUrl = ref('')
+const openedInNewTab = ref(false)
 
 const courseId = route.params.courseId
 
@@ -28,17 +26,28 @@ const formatPrice = (price) => {
   return `Rp ${num.toLocaleString('id-ID')}`
 }
 
-const heroImage = computed(() => {
-  const c = course.value
-  return c?.thumbnail || c?.thumbnail_url || c?.image || c?.featured_image || ''
-})
+const buildWaMessage = (data) => {
+  const who = auth.user?.full_name ? ` ${auth.user.full_name}` : ''
+  return [
+    `Halo Byzan Edu, saya${who} ingin mendaftar kursus "${data?.title || ''}" (${formatPrice(data?.price)}).`,
+    'Mohon informasi cara pembayaran dan pendaftarannya. Terima kasih.',
+  ].join('\n')
+}
 
-const instructorName = computed(() => {
-  const inst = course.value?.instructor
-  if (!inst) return 'Byzan'
-  if (typeof inst === 'string') return inst
-  return inst.full_name || inst.username || inst.email || 'Byzan'
-})
+const waLink = (text) => `https://wa.me/${WA_PHONE}?text=${encodeURIComponent(text)}`
+
+// Buka WhatsApp di tab baru. Return false bila diblokir popup blocker.
+const openWhatsAppInNewTab = () => {
+  if (!waUrl.value) return false
+  const win = window.open(waUrl.value, '_blank')
+  if (!win) return false
+  try {
+    win.opener = null
+  } catch {
+    // abaikan — tab tetap terbuka
+  }
+  return true
+}
 
 const fetchCourse = async () => {
   loading.value = true
@@ -46,8 +55,17 @@ const fetchCourse = async () => {
   try {
     const { data } = await api.get(`/courses/${courseId}/`)
     course.value = data
+    // Course gratis tidak lewat halaman ini — enroll langsung dari halaman detail
     if (Number(data?.price ?? 0) === 0) {
       router.replace({ name: 'course-details', params: { id: courseId } })
+      return
+    }
+    waUrl.value = waLink(buildWaMessage(data))
+    // Course berbayar: buka WhatsApp admin di tab baru.
+    // Kalau popup diblokir browser, lanjutkan di tab ini.
+    openedInNewTab.value = openWhatsAppInNewTab()
+    if (!openedInNewTab.value) {
+      window.location.href = waUrl.value
     }
   } catch (e) {
     console.error('[Checkout] Gagal fetch course:', e)
@@ -55,34 +73,6 @@ const fetchCourse = async () => {
     error.value = msg || `Gagal memuat data kursus (ID: ${courseId}). Periksa koneksi atau coba lagi.`
   } finally {
     loading.value = false
-  }
-}
-
-const handlePay = async () => {
-  payError.value = null
-  showPayError.value = false
-  payErrorMessage.value = ''
-  paying.value = true
-  try {
-    const data = await buyWithMidtrans(Number(courseId))
-    const redirectUrl = data?.snap_redirect_url
-    if (!redirectUrl) {
-      throw new Error('Gagal mendapatkan URL pembayaran dari server')
-    }
-    window.location.href = redirectUrl
-  } catch (e) {
-    const resData = e.response?.data
-    if (resData && typeof resData === 'object') {
-      payError.value = Object.entries(resData)
-        .map(([k, v]) => Array.isArray(v) ? `${k}: ${v.join(', ')}` : `${k}: ${v}`)
-        .join(' | ')
-    } else {
-      payError.value = e.response?.data?.message || e.response?.data?.error || e.message || 'Gagal memproses pembayaran'
-    }
-    payErrorMessage.value = payError.value
-    showPayError.value = true
-  } finally {
-    paying.value = false
   }
 }
 
@@ -96,10 +86,6 @@ const logout = () => {
 }
 
 onMounted(() => {
-  if (!auth.token) {
-    router.push({ name: 'login', query: { redirect: route.fullPath } })
-    return
-  }
   fetchCourse()
 })
 </script>
@@ -107,13 +93,6 @@ onMounted(() => {
 <template>
   <div class="w-full max-w-full mx-auto relative bg-[#f8fafb] overflow-x-hidden min-h-screen flex flex-col">
     <AppHeader :is-authenticated="!!auth.token" :user="auth.user" @logout="logout" />
-
-    <ErrorModal
-      :show="showPayError"
-      title="Gagal"
-      :message="payErrorMessage"
-      @close="showPayError = false"
-    />
 
     <main class="flex-1">
       <!-- Breadcrumb -->
@@ -125,10 +104,10 @@ onMounted(() => {
         </div>
       </div>
 
-      <!-- Loading -->
+      <!-- Loading / Redirecting -->
       <div v-if="loading" class="flex flex-col items-center justify-center py-32 gap-4">
         <div class="w-10 h-10 border-[3px] border-primary/20 border-t-primary rounded-full animate-spin"></div>
-        <p class="font-['Montserrat'] text-sm text-gray-400">Memuat detail pembelian...</p>
+        <p class="font-['Montserrat'] text-sm text-gray-400">Mengarahkan ke WhatsApp...</p>
       </div>
 
       <!-- Error -->
@@ -145,157 +124,47 @@ onMounted(() => {
         </button>
       </div>
 
-      <!-- Main Content -->
-      <div v-else class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-6 pb-20">
-        <div class="grid grid-cols-1 lg:grid-cols-5 gap-8 items-start">
-
-          <!-- LEFT: Course Detail -->
-          <div class="lg:col-span-3 space-y-6">
-            <!-- Thumbnail -->
-            <div class="relative aspect-video w-full rounded-2xl overflow-hidden bg-gray-200 shadow-sm">
-              <img
-                v-if="heroImage"
-                :src="heroImage"
-                :alt="course?.title"
-                class="w-full h-full object-cover"
-              />
-              <div v-else class="w-full h-full bg-gradient-to-br from-primary/10 via-primary/5 to-transparent flex items-center justify-center">
-                <svg class="w-16 h-16 text-primary/30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                </svg>
-              </div>
-            </div>
-
-            <!-- Title & Instructor -->
-            <div>
-              <h1 class="font-['Montserrat'] text-2xl lg:text-3xl font-extrabold text-gray-900 leading-tight mb-3">
-                {{ course?.title }}
-              </h1>
-              <div class="flex items-center gap-3">
-                <div class="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-xs font-bold font-['Montserrat']">
-                  {{ (instructorName || 'B')[0].toUpperCase() }}
-                </div>
-                <span class="font-['Montserrat'] text-sm text-gray-500">oleh <span class="text-gray-700 font-semibold">{{ instructorName }}</span></span>
-              </div>
-            </div>
-
-            <!-- Description -->
-            <div class="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
-              <h3 class="font-['Montserrat'] text-sm font-bold text-gray-800 uppercase tracking-wide mb-3">Tentang Kursus</h3>
-              <p class="font-['Montserrat'] text-sm text-gray-600 leading-relaxed">
-                {{ course?.description || 'Tidak ada deskripsi.' }}
-              </p>
-            </div>
-
-            <!-- What you'll get -->
-            <div class="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
-              <h3 class="font-['Montserrat'] text-sm font-bold text-gray-800 uppercase tracking-wide mb-4">Termasuk</h3>
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div v-for="item in [
-                  { icon: 'M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z', label: 'Video pembelajaran' },
-                  { icon: 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z', label: 'Akses seumur hidup' },
-                  { icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2', label: 'Sertifikat kelulusan' },
-                  { icon: 'M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z', label: 'Forum diskusi' },
-                ]" :key="item.label" class="flex items-center gap-3">
-                  <div class="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
-                    <svg class="w-4 h-4 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" :d="item.icon" />
-                    </svg>
-                  </div>
-                  <span class="font-['Montserrat'] text-sm text-gray-700">{{ item.label }}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- RIGHT: Order Summary -->
-          <div class="lg:col-span-2">
-            <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 lg:sticky lg:top-28">
-              <h3 class="font-['Montserrat'] text-lg font-bold text-gray-800 mb-6">Ringkasan Pesanan</h3>
-
-              <!-- Course Summary -->
-              <div class="flex gap-4 pb-5 border-b border-gray-100">
-                <div class="w-16 h-16 rounded-xl bg-gray-100 overflow-hidden shrink-0">
-                  <img v-if="heroImage" :src="heroImage" :alt="course?.title" class="w-full h-full object-cover" />
-                  <div v-else class="w-full h-full bg-gradient-to-br from-primary/10 to-primary/5 flex items-center justify-center">
-                    <svg class="w-6 h-6 text-primary/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                    </svg>
-                  </div>
-                </div>
-                <div class="flex-1 min-w-0">
-                  <p class="font-['Montserrat'] text-sm font-bold text-gray-800 leading-snug line-clamp-2">{{ course?.title }}</p>
-                  <p class="font-['Montserrat'] text-xs text-gray-400 mt-1">{{ instructorName }}</p>
-                </div>
-              </div>
-
-              <!-- Price Breakdown -->
-              <div class="py-5 space-y-3 border-b border-gray-100">
-                <div class="flex justify-between items-center">
-                  <span class="font-['Montserrat'] text-sm text-gray-500">Harga Kursus</span>
-                  <span class="font-['Montserrat'] text-sm font-semibold text-gray-700">{{ formatPrice(course?.price) }}</span>
-                </div>
-                <div class="flex justify-between items-center">
-                  <span class="font-['Montserrat'] text-sm text-gray-500">Biaya Layanan</span>
-                  <span class="font-['Montserrat'] text-sm text-emerald-600 font-semibold">Gratis</span>
-                </div>
-              </div>
-
-              <!-- Total -->
-              <div class="flex justify-between items-center py-5">
-                <span class="font-['Montserrat'] text-base font-bold text-gray-900">Total</span>
-                <span class="font-['Montserrat'] text-xl font-extrabold text-primary">{{ formatPrice(course?.price) }}</span>
-              </div>
-
-              <!-- Pay Button -->
-              <button
-                class="w-full bg-primary hover:bg-primary/90 text-white font-['Montserrat'] font-bold py-3.5 px-6 rounded-xl transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-primary/20 hover:shadow-xl hover:shadow-primary/25 active:scale-[0.98]"
-                :disabled="paying"
-                @click="handlePay"
-              >
-                <span v-if="paying" class="flex items-center justify-center gap-2">
-                  <span class="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
-                  Memproses...
-                </span>
-                <span v-else>Bayar Sekarang</span>
-              </button>
-
-              <!-- Back Link -->
-              <button
-                class="w-full mt-3 text-gray-400 hover:text-gray-600 font-['Montserrat'] text-sm font-medium py-2 transition-colors"
-                @click="goBack"
-              >
-                Kembali ke detail kursus
-              </button>
-
-              <!-- Payment Methods -->
-              <div class="mt-6 pt-5 border-t border-gray-100">
-                <p class="font-['Montserrat'] text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3 text-center">Didukung oleh</p>
-                <div class="flex items-center justify-center gap-3">
-                  <div class="h-8 px-3 bg-gray-50 rounded-lg flex items-center justify-center">
-                    <span class="font-['Montserrat'] text-[10px] font-bold text-gray-400">BCA</span>
-                  </div>
-                  <div class="h-8 px-3 bg-gray-50 rounded-lg flex items-center justify-center">
-                    <span class="font-['Montserrat'] text-[10px] font-bold text-gray-400">BNI</span>
-                  </div>
-                  <div class="h-8 px-3 bg-gray-50 rounded-lg flex items-center justify-center">
-                    <span class="font-['Montserrat'] text-[10px] font-bold text-gray-400">Mandiri</span>
-                  </div>
-                  <div class="h-8 px-3 bg-gray-50 rounded-lg flex items-center justify-center">
-                    <span class="font-['Montserrat'] text-[10px] font-bold text-gray-400">GoPay</span>
-                  </div>
-                  <div class="h-8 px-3 bg-gray-50 rounded-lg flex items-center justify-center">
-                    <span class="font-['Montserrat'] text-[10px] font-bold text-gray-400">QRIS</span>
-                  </div>
-                </div>
-                <p class="text-center mt-3 font-['Montserrat'] text-[10px] text-gray-400">
-                  Pembayaran diproses oleh <span class="font-semibold text-gray-500">Midtrans</span>
-                </p>
-              </div>
-            </div>
-          </div>
-
+      <!-- Redirect fallback (tampil bila auto-redirect tidak jalan) -->
+      <div v-else class="max-w-md mx-auto px-4 py-24 text-center">
+        <div class="w-16 h-16 bg-emerald-50 rounded-2xl flex items-center justify-center mx-auto mb-5">
+          <svg class="w-8 h-8 text-emerald-600" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M17.47 14.38c-.3-.15-1.75-.86-2.02-.96-.27-.1-.47-.15-.67.15-.2.3-.77.96-.94 1.16-.17.2-.35.22-.65.07-.3-.15-1.13-.42-2.15-1.33-.79-.71-1.33-1.58-1.48-1.88-.15-.3-.02-.47.13-.62.15-.15.3-.35.45-.52.15-.18.2-.3.3-.5.1-.2.05-.37-.03-.52-.07-.15-.67-1.62-.92-2.2-.24-.58-.49-.5-.67-.51h-.57c-.2 0-.52.07-.79.37-.27.3-1.04 1.01-1.04 2.47 0 1.45 1.06 2.86 1.21 3.06.15.2 2.09 3.2 5.07 4.37 2.98 1.16 2.98.77 3.52.72.54-.05 1.75-.71 2-1.4.25-.7.25-1.28.17-1.4-.07-.13-.27-.2-.57-.35z"/>
+            <path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2 22l5.28-1.38a9.88 9.88 0 0 0 4.76 1.21h.01c5.46 0 9.91-4.45 9.91-9.92C21.96 6.45 17.5 2 12.04 2zm0 18.11h-.01c-1.5 0-2.98-.4-4.27-1.17l-.31-.18-3.17.83.85-3.09-.2-.32a8.22 8.22 0 0 1-1.26-4.38c0-4.54 3.7-8.23 8.24-8.23 2.2 0 4.27.86 5.82 2.41a8.18 8.18 0 0 1 2.41 5.83c0 4.54-3.7 8.23-8.24 8.23z"/>
+          </svg>
         </div>
+        <h3 class="font-['Montserrat'] text-lg font-bold text-gray-800 mb-2">
+          {{ openedInNewTab ? 'WhatsApp dibuka di tab baru' : 'Mengarahkan ke WhatsApp' }}
+        </h3>
+        <p class="font-['Montserrat'] text-sm text-gray-500 mb-6">
+          <template v-if="openedInNewTab">
+            Lanjutkan pendaftaran
+            <span v-if="course?.title" class="font-semibold text-gray-700">"{{ course.title }}"</span>
+            di tab WhatsApp yang baru terbuka. Jika tidak terbuka, klik tombol di bawah.
+          </template>
+          <template v-else>
+            Anda akan diarahkan ke WhatsApp admin untuk menyelesaikan pendaftaran
+            <span v-if="course?.title" class="font-semibold text-gray-700">"{{ course.title }}"</span>.
+            Jika tidak terarahkan otomatis, klik tombol di bawah.
+          </template>
+        </p>
+        <a
+          :href="waUrl"
+          target="_blank"
+          rel="noopener"
+          class="inline-flex items-center justify-center gap-2 w-full bg-primary hover:bg-primary/90 text-white font-['Montserrat'] font-bold py-3.5 px-6 rounded-xl transition-all duration-200 shadow-lg shadow-primary/20 hover:shadow-xl hover:shadow-primary/25 active:scale-[0.98]"
+        >
+          <svg class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M17.47 14.38c-.3-.15-1.75-.86-2.02-.96-.27-.1-.47-.15-.67.15-.2.3-.77.96-.94 1.16-.17.2-.35.22-.65.07-.3-.15-1.13-.42-2.15-1.33-.79-.71-1.33-1.58-1.48-1.88-.15-.3-.02-.47.13-.62.15-.15.3-.35.45-.52.15-.18.2-.3.3-.5.1-.2.05-.37-.03-.52-.07-.15-.67-1.62-.92-2.2-.24-.58-.49-.5-.67-.51h-.57c-.2 0-.52.07-.79.37-.27.3-1.04 1.01-1.04 2.47 0 1.45 1.06 2.86 1.21 3.06.15.2 2.09 3.2 5.07 4.37 2.98 1.16 2.98.77 3.52.72.54-.05 1.75-.71 2-1.4.25-.7.25-1.28.17-1.4-.07-.13-.27-.2-.57-.35z"/>
+            <path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2 22l5.28-1.38a9.88 9.88 0 0 0 4.76 1.21h.01c5.46 0 9.91-4.45 9.91-9.92C21.96 6.45 17.5 2 12.04 2zm0 18.11h-.01c-1.5 0-2.98-.4-4.27-1.17l-.31-.18-3.17.83.85-3.09-.2-.32a8.22 8.22 0 0 1-1.26-4.38c0-4.54 3.7-8.23 8.24-8.23 2.2 0 4.27.86 5.82 2.41a8.18 8.18 0 0 1 2.41 5.83c0 4.54-3.7 8.23-8.24 8.23z"/>
+          </svg>
+          Buka WhatsApp
+        </a>
+        <button
+          class="w-full mt-3 text-gray-400 hover:text-gray-600 font-['Montserrat'] text-sm font-medium py-2 transition-colors"
+          @click="goBack"
+        >
+          Kembali ke detail kursus
+        </button>
       </div>
     </main>
 

@@ -85,10 +85,14 @@ export default defineConfig(({ command }) => ({
   plugins: [vue(), tailwindcss(), command === 'build' ? optimizePublicImages() : null].filter(Boolean),
   server: {
     port: 5172,
-    allowedHosts: ['byzanedu.com','byzan.scagerwebsite.uk'],
+    allowedHosts: ['localhost:8500'],
     proxy: {
       '/api': {
-        target: 'http://localhost:8020',
+        target: 'http://localhost:8500',
+        changeOrigin: true,
+      },
+      '/media': {
+        target: 'http://localhost:8500',
         changeOrigin: true,
       },
     },
