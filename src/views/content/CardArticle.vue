@@ -1,7 +1,7 @@
 <script setup>
-import { getAssetUrl } from "../../utils/assets";
+import { computed } from "vue";
 
-defineProps({
+const props = defineProps({
   article: {
     type: Object,
     required: true,
@@ -25,6 +25,26 @@ defineProps({
     default: false,
   },
 });
+
+// Backend mengirim `full_name` yang kadang string kosong, jadi jangan
+// langsung dipakai — jatuhkan ke username, lalu ke email tanpa domain.
+const authorName = computed(() => {
+  const a = props.article?.author;
+  if (!a) return null;
+  if (typeof a === "string") return a.trim() || null;
+  const name = String(a.full_name || "").trim();
+  if (name) return name;
+  const username = String(a.username || "").trim();
+  if (username) return username;
+  const email = String(a.email || "").trim();
+  return email ? email.split("@")[0] : null;
+});
+
+const authorPhoto = computed(() => props.article?.author?.profile_photo_url || null);
+
+const authorInitial = computed(() =>
+  String(authorName.value || "?").trim().charAt(0).toUpperCase()
+);
 </script>
 
 <template>
@@ -52,6 +72,25 @@ defineProps({
       </div>
 
       <div class="p-5 flex flex-col">
+        <!-- Byline penulis: hanya tampil kalau namanya benar-benar ada -->
+        <div v-if="authorName" class="flex items-center gap-2 mb-2.5">
+          <img
+            v-if="authorPhoto"
+            :src="authorPhoto"
+            :alt="authorName"
+            class="w-6 h-6 rounded-full object-cover shrink-0 bg-gray-100"
+            loading="lazy"
+          />
+          <span
+            v-else
+            class="flex items-center justify-center w-6 h-6 rounded-full bg-primary/10 text-primary text-[10px] font-bold shrink-0"
+            aria-hidden="true"
+          >
+            {{ authorInitial }}
+          </span>
+          <span class="text-xs font-semibold text-gray-600 truncate">{{ authorName }}</span>
+        </div>
+
         <h3
           class="text-base md:text-lg font-bold text-gray-900 mb-2 line-clamp-2 group-hover:text-primary transition-colors leading-snug"
           v-html="article.title"
@@ -60,7 +99,6 @@ defineProps({
       </div>
     </div>
 
-    <!-- Footer: tanggal saja (rating dihapus) -->
     <footer class="px-5 py-4 border-t border-gray-100 flex items-center justify-between text-sm text-gray-500">
       <span class="truncate">{{ article.date }}</span>
       <span class="shrink-0 inline-flex items-center gap-1 text-primary font-semibold text-xs group-hover:gap-2 transition-all">

@@ -35,7 +35,7 @@ const posting = ref(false);
 const showPostSuccess = ref(false);
 const showPostError = ref(false);
 const postSuccessMessage = ref("");
-const postErrorMessage = ref("");
+const postError = ref(null);
 
 const API_ORIGIN = (() => {
   try {
@@ -95,6 +95,54 @@ const readingTime = computed(() => {
   return Math.max(1, Math.round(words / 200));
 });
 
+// ===== Penulis =====
+// Backend mengirim author sebagai objek: { id, username, email, full_name, bio, profile_photo_url }
+// Nilai `full_name` dan `bio` sering berupa string kosong, jadi semuanya
+// dicek eksplisit agar kartu tetap rapi saat datanya belum diisi.
+const author = computed(() => article.value?.author || null);
+
+const authorName = computed(() => {
+  const a = author.value;
+  if (!a) return null;
+  if (typeof a === "string") return a.trim() || null;
+  const name = String(a.full_name || "").trim();
+  if (name) return name;
+  const username = String(a.username || "").trim();
+  if (username) return username;
+  const email = String(a.email || "").trim();
+  return email ? email.split("@")[0] : null;
+});
+
+const authorHandle = computed(() => {
+  const a = author.value;
+  if (!a || typeof a === "string") return null;
+  const username = String(a.username || "").trim();
+  // Jangan tampilkan handle kalau isinya sama persis dengan nama yang sudah tampil
+  if (!username || username === authorName.value) return null;
+  return username;
+});
+
+const authorBio = computed(() => {
+  const bio = String(author.value?.bio || "").trim();
+  return bio || null;
+});
+
+const authorPhoto = computed(() => author.value?.profile_photo_url || null);
+
+const authorInitial = computed(() =>
+  String(authorName.value || "?").trim().charAt(0).toUpperCase()
+);
+
+const viewsCount = computed(() => {
+  const v = Number(article.value?.views_count ?? 0);
+  return Number.isFinite(v) ? v : 0;
+});
+
+const ratingAvg = computed(() => {
+  const r = Number(article.value?.rating_avg ?? 0);
+  return r > 0 ? r.toFixed(1) : null;
+});
+
 const fetchCategories = async () => {
   try {
     const { data } = await api.get("/posts/categories/");
@@ -103,6 +151,10 @@ const fetchCategories = async () => {
     categories.value = [];
   }
 };
+
+// Satu tempat untuk merapikan objek author dari API
+const normalizeAuthor = (a) =>
+  a ? { ...a, profile_photo_url: normalizeMediaUrl(a.profile_photo_url) } : null;
 
 const loadArticle = async (articleId) => {
   if (!articleId) return;
@@ -120,6 +172,7 @@ const loadArticle = async (articleId) => {
     article.value = {
       ...data,
       thumbnail: normalizeMediaUrl(data?.thumbnail_url || data?.thumbnail) || data?.thumbnail || null,
+      author: normalizeAuthor(data?.author),
       date: toDisplayDate(data?.published_at || data?.created_at),
     };
     await fetchPostComments();
@@ -137,6 +190,7 @@ const loadArticle = async (articleId) => {
           ...p,
           date: toDisplayDate(p?.published_at || p?.created_at),
           thumbnail: normalizeMediaUrl(p?.thumbnail_url || p?.thumbnail) || p?.thumbnail || null,
+          author: normalizeAuthor(p?.author),
         }));
     } catch (e) {
       relatedPosts.value = [];
@@ -198,15 +252,14 @@ const handleSubmitComment = async (e) => {
     posting.value = true;
     showPostSuccess.value = false;
     showPostError.value = false;
-    postSuccessMessage.value = "";
-    postErrorMessage.value = "";
+    postError.value = null;
 
     const payload = {
       rating: Number(myPostRating.value || 0),
       comment: String(commentText.value || "").trim(),
     };
     const slug = String(article.value?.slug || "").trim();
-    if (!slug) throw new Error("Slug tidak ditemukan");
+    if (!slug) throw new Error("Slug artikel tidak ditemukan.");
     const { data } = await api.post(`/posts/${encodeURIComponent(slug)}/comments/`, payload);
     postSuccessMessage.value = "Komentar berhasil disimpan.";
     showPostSuccess.value = true;
@@ -221,16 +274,8 @@ const handleSubmitComment = async (e) => {
       await fetchPostComments();
     }
   } catch (e) {
-    console.error("Failed to post comment:", e);
-    const resData = e.response?.data;
-    if (resData && typeof resData === "object") {
-      const messages = Object.entries(resData)
-        .map(([k, v]) => (Array.isArray(v) ? `${k}: ${v.join(", ")}` : `${k}: ${v}`))
-        .join(" | ");
-      postErrorMessage.value = messages;
-    } else {
-      postErrorMessage.value = e.response?.data?.message || e.response?.data?.error || e.message || "Gagal menyimpan komentar.";
-    }
+    console.error("Gagal mengirim komentar:", e);
+    postError.value = e;
     showPostError.value = true;
   } finally {
     posting.value = false;
@@ -276,11 +321,11 @@ const fetchPostComments = async () => {
   commentsError.value = null;
   try {
     const slug = String(article.value?.slug || "").trim();
-    if (!slug) throw new Error("Slug tidak ditemukan");
+    if (!slug) throw new Error("Slug artikel tidak ditemukan.");
     const { data } = await api.get(`/posts/${encodeURIComponent(slug)}/comments/`);
     comments.value = Array.isArray(data) ? data : data?.results || [];
   } catch (e) {
-    commentsError.value = e.response?.data?.message || e.message || "Gagal memuat komentar.";
+    commentsError.value = e.response?.data?.detail || "Gagal memuat komentar.";
     comments.value = [];
   } finally {
     commentsLoading.value = false;
@@ -300,7 +345,7 @@ const goBack = () => {
   <div class="relative bg-white">
     <AppHeader :is-authenticated="isAuthenticated" :user="auth.user" @logout="logout" />
     <SuccessModal :show="showPostSuccess" title="Berhasil" :message="postSuccessMessage" @close="showPostSuccess = false" />
-    <ErrorModal :show="showPostError" title="Gagal" :message="postErrorMessage" @close="showPostError = false" />
+    <ErrorModal :show="showPostError" title="Gagal Mengirim Komentar" :error="postError" @close="showPostError = false" />
 
     <main>
       <!-- ===== Loading skeleton ===== -->
@@ -323,6 +368,19 @@ const goBack = () => {
             <div class="h-4 w-full rounded shimmer"></div>
             <div class="h-4 w-full rounded shimmer mt-2.5"></div>
             <div class="h-4 w-4/5 rounded shimmer mt-2.5"></div>
+          </div>
+        </div>
+
+        <!-- Skeleton kartu penulis -->
+        <div class="max-w-[760px] mx-auto px-4 pb-10">
+          <div class="rounded-2xl border border-gray-200 p-6 flex gap-4">
+            <div class="w-16 h-16 rounded-full shimmer shrink-0"></div>
+            <div class="flex-1">
+              <div class="h-3 w-20 rounded shimmer"></div>
+              <div class="h-5 w-40 rounded shimmer mt-2"></div>
+              <div class="h-3 w-full rounded shimmer mt-3"></div>
+              <div class="h-3 w-2/3 rounded shimmer mt-2"></div>
+            </div>
           </div>
         </div>
 
@@ -363,7 +421,6 @@ const goBack = () => {
       <template v-else-if="article">
         <header class="border-b border-gray-100">
           <div class="max-w-[760px] mx-auto px-4 pt-6 md:pt-10 pb-8">
-            <!-- Tombol kembali: pill jelas, bukan teks polos yang nempel badge -->
             <button
               type="button"
               @click="goBack"
@@ -375,7 +432,6 @@ const goBack = () => {
               Semua Artikel
             </button>
 
-            <!-- Kategori di baris sendiri -->
             <div class="mb-4">
               <span class="inline-block bg-[#64fb5f] text-black px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wide">
                 {{ displayCategoryName(article.category) }}
@@ -386,11 +442,28 @@ const goBack = () => {
               {{ article.title }}
             </h1>
 
-            <!-- Meta: tanggal + waktu baca saja -->
-            <div class="flex items-center gap-2 text-sm text-gray-500">
-              <span>{{ article.date }}</span>
+            <!-- Meta ringkas: penulis + tanggal + waktu baca -->
+            <div class="flex items-center gap-3 flex-wrap">
+              <div v-if="authorName" class="flex items-center gap-2">
+                <img
+                  v-if="authorPhoto"
+                  :src="authorPhoto"
+                  :alt="authorName"
+                  class="w-8 h-8 rounded-full object-cover bg-gray-100"
+                />
+                <span
+                  v-else
+                  class="flex items-center justify-center w-8 h-8 rounded-full bg-primary/10 text-primary text-xs font-bold"
+                  aria-hidden="true"
+                >
+                  {{ authorInitial }}
+                </span>
+                <span class="text-sm font-semibold text-gray-800">{{ authorName }}</span>
+              </div>
+              <span v-if="authorName" class="text-gray-300">·</span>
+              <span class="text-sm text-gray-500">{{ article.date }}</span>
               <span class="text-gray-300">·</span>
-              <span>{{ readingTime }} min baca</span>
+              <span class="text-sm text-gray-500">{{ readingTime }} min baca</span>
             </div>
           </div>
 
@@ -424,6 +497,69 @@ const goBack = () => {
             </button>
           </div>
         </div>
+
+        <!-- ===== Kartu Penulis =====
+             Ditampilkan hanya bila nama penulis ada. Bio, foto, dan handle
+             masing-masing punya v-if sendiri agar layout tidak pincang
+             saat sebagian data masih kosong dari backend. -->
+        <section v-if="authorName" class="max-w-[760px] mx-auto px-4 pb-12">
+          <div class="rounded-2xl border border-gray-200 bg-gradient-to-br from-gray-50 to-white p-6 md:p-7">
+            <p class="text-[11px] font-bold uppercase tracking-wider text-primary m-0 mb-4">
+              Ditulis oleh
+            </p>
+
+            <div class="flex flex-col sm:flex-row gap-5">
+              <!-- Foto / inisial -->
+              <div class="shrink-0">
+                <img
+                  v-if="authorPhoto"
+                  :src="authorPhoto"
+                  :alt="authorName"
+                  class="w-20 h-20 rounded-full object-cover ring-4 ring-white shadow-md bg-gray-100"
+                  loading="lazy"
+                />
+                <div
+                  v-else
+                  class="w-20 h-20 rounded-full bg-primary/10 text-primary ring-4 ring-white shadow-md flex items-center justify-center text-2xl font-bold"
+                  aria-hidden="true"
+                >
+                  {{ authorInitial }}
+                </div>
+              </div>
+
+              <div class="min-w-0 flex-1">
+                <h3 class="text-lg md:text-xl font-bold text-gray-900 m-0 leading-snug">
+                  {{ authorName }}
+                </h3>
+                <p v-if="authorHandle" class="text-sm text-gray-500 m-0 mt-0.5">@{{ authorHandle }}</p>
+
+                <p v-if="authorBio" class="text-sm text-gray-600 leading-relaxed m-0 mt-3">
+                  {{ authorBio }}
+                </p>
+                <p v-else class="text-sm text-gray-400 italic m-0 mt-3">
+                  Penulis belum menambahkan deskripsi.
+                </p>
+
+                <!-- Statistik artikel: hanya yang datanya benar-benar ada -->
+                <div v-if="viewsCount || ratingAvg" class="flex items-center gap-4 mt-4 pt-4 border-t border-gray-200/70">
+                  <span v-if="viewsCount" class="inline-flex items-center gap-1.5 text-xs font-semibold text-gray-600">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4 text-gray-400">
+                      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" />
+                    </svg>
+                    {{ viewsCount }} kali dibaca
+                  </span>
+                  <span v-if="ratingAvg" class="inline-flex items-center gap-1.5 text-xs font-semibold text-gray-600">
+                    <svg viewBox="0 0 24 24" fill="currentColor" class="w-4 h-4 text-amber-400">
+                      <path d="M12 2l2.9 6.1 6.6.9-4.8 4.6 1.2 6.6L12 17.1 6.1 20.2l1.2-6.6L2.5 9l6.6-.9z" />
+                    </svg>
+                    {{ ratingAvg }}
+                    <span class="text-gray-400 font-medium">({{ article.rating_count || 0 }} rating)</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
 
         <!-- Comments -->
         <section id="comments" class="max-w-[760px] mx-auto px-4 pb-14">

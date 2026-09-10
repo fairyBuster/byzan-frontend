@@ -24,8 +24,34 @@ const isFree = computed(
 
 const ratingValue = computed(() => {
   const r = props.course?.rate ?? props.course?.rating_avg
-  return r != null ? Number(r).toFixed(1) : null
+  const n = Number(r)
+  // rating_avg = 0 berarti belum ada yang menilai, jangan tampilkan "0.0"
+  return Number.isFinite(n) && n > 0 ? n.toFixed(1) : null
 })
+
+// Backend mengirim `instructor` sebagai objek {username, full_name, email, ...}
+// dengan full_name yang sering kosong, jadi jatuhkan bertingkat.
+const instructorName = computed(() => {
+  const c = props.course || {}
+  if (c.instructor_name) return String(c.instructor_name).trim() || null
+  const i = c.instructor
+  if (!i) return null
+  if (typeof i === 'string') return i.trim() || null
+  const fullName = String(i.full_name || '').trim()
+  if (fullName) return fullName
+  const username = String(i.username || '').trim()
+  if (username) return username
+  const email = String(i.email || '').trim()
+  return email ? email.split('@')[0] : null
+})
+
+const instructorPhoto = computed(
+  () => props.course?.instructor_photo || props.course?.instructor?.profile_photo_url || null
+)
+
+const instructorInitial = computed(() =>
+  String(instructorName.value || '?').trim().charAt(0).toUpperCase()
+)
 
 const initials = computed(() =>
   String(props.course?.title || '?').trim().charAt(0).toUpperCase()
@@ -52,7 +78,6 @@ const initials = computed(() =>
         </span>
       </div>
 
-      <!-- Rating: pojok kanan atas, hemat ruang -->
       <span
         v-if="ratingValue"
         class="absolute top-2 right-2 flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-black/60 backdrop-blur-sm text-white text-[10px] md:text-[11px] font-semibold"
@@ -70,20 +95,39 @@ const initials = computed(() =>
         {{ course.title }}
       </h3>
 
-      <p v-if="course.instructor_name" class="text-[11px] md:text-xs text-gray-500 font-medium mt-1 truncate">
-        {{ course.instructor_name }}
-      </p>
+      <!-- Instruktur: hanya tampil kalau namanya benar-benar ada -->
+      <div v-if="instructorName" class="flex items-center gap-1.5 mt-1.5">
+        <img
+          v-if="instructorPhoto"
+          :src="instructorPhoto"
+          :alt="instructorName"
+          class="w-5 h-5 rounded-full object-cover shrink-0 bg-gray-100"
+          loading="lazy"
+        />
+        <span
+          v-else
+          class="flex items-center justify-center w-5 h-5 rounded-full bg-primary/10 text-primary text-[9px] font-bold shrink-0"
+          aria-hidden="true"
+        >
+          {{ instructorInitial }}
+        </span>
+        <span class="text-[11px] md:text-xs text-gray-500 font-medium truncate">{{ instructorName }}</span>
+      </div>
 
-      <!-- Deskripsi: hanya tampil di layar besar, di mobile makan tempat -->
       <p class="hidden md:block text-xs text-gray-600 leading-relaxed line-clamp-2 mt-2">
         {{ course.description }}
       </p>
 
-      <!-- Meta bawah: mt-auto bikin tinggi card seragam -->
       <div class="mt-auto pt-2.5 md:pt-3">
         <div class="flex items-center gap-1.5 text-[10px] md:text-[11px] text-gray-500 mb-2">
           <span v-if="course.total_lessons" class="whitespace-nowrap">
             {{ course.total_lessons }} lesson
+          </span>
+          <template v-if="course.total_lessons && course.buyers_count">
+            <span class="text-gray-300">·</span>
+          </template>
+          <span v-if="course.buyers_count" class="whitespace-nowrap">
+            {{ course.buyers_count }} peserta
           </span>
         </div>
 

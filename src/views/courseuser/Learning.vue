@@ -44,7 +44,6 @@ const askSuccessMessage = ref('')
 const askError = ref(null)
 
 // Player: tampilkan thumbnail dulu (facade), iframe baru dimuat saat diklik.
-// Ini juga bikin halaman jauh lebih ringan karena iframe YouTube berat.
 const playerActive = ref(false)
 
 const dummyRecommendedCourses = [
@@ -52,11 +51,23 @@ const dummyRecommendedCourses = [
   { id: 3, title: 'Kursus Mantiq', image: null, thumbnail: null, featured_image: null },
 ]
 
-// Asset URLs
 const videoThumbnailSrc = getAssetUrl('8de126a496aa3535b193b674681ac3ff0368a390.png')
-const instructorAvatarSrc = getAssetUrl('28f5b8e9d2c7d6c0b8900264c40a99813e027bab.png')
-const checkedIconSrc = getAssetUrl('016b68354b9cc166fe7e60d6e02b4f4b4d6fccf3.png')
 const recommendedCourse1Src = getAssetUrl('f72456441df4efd0eb5ecfda62f6b31c8d4550ef.png')
+
+// URL media dari backend bisa relatif; samakan ke origin API
+const API_ORIGIN = (() => {
+  try {
+    return new URL(api.defaults.baseURL).origin
+  } catch {
+    return ''
+  }
+})()
+const normalizeMediaUrl = (url) => {
+  if (!url) return null
+  if (/^https?:\/\//i.test(url)) return url
+  const path = String(url)
+  return path.startsWith('/') ? `${API_ORIGIN}${path}` : `${API_ORIGIN}/${path}`
+}
 
 const formatLessonDuration = (minutes) => {
   if (!minutes && minutes !== 0) return '-'
@@ -102,7 +113,6 @@ const thumbnailSrc = computed(() => {
   return course.value?.thumbnail_url || videoThumbnailSrc
 })
 
-// Fallback kalau maxresdefault tidak tersedia untuk video tersebut
 const onThumbError = (e) => {
   const id = getYouTubeId(currentLesson.value?.video_url)
   if (id && !e.target.dataset.fallback) {
@@ -137,6 +147,20 @@ const loadRecommendedCourses = async (courseId) => {
 const mapCourseFromApi = (c) => {
   if (!c) return null
   const priceValue = Number(c.price ?? 0)
+
+  // Backend mengirim `instructor` sebagai OBJEK:
+  // { id, username, full_name, email, bio, profile_photo_url }
+  // `full_name` sering kosong, jadi jatuhkan bertingkat ke username lalu email.
+  const inst = c.instructor || null
+  const instFullName = String(inst?.full_name || '').trim()
+  const instUsername = String(inst?.username || '').trim()
+  const instEmail = String(inst?.email || '').trim()
+  const instName =
+    instFullName ||
+    instUsername ||
+    (instEmail ? instEmail.split('@')[0] : '') ||
+    String(c.instructor_name || '').trim()
+
   return {
     id: c.id,
     title: c.title || '',
@@ -146,9 +170,11 @@ const mapCourseFromApi = (c) => {
     price: priceValue,
     is_free: priceValue === 0,
     createdAt: c.created_at || c.createdAt || null,
-    // Field instruktur dari backend: `instructor_name`
-    instructor_name: c.instructor_name || c.instructor_username || c.instructor?.name || null,
-    instructor_avatar: c.instructor_avatar || c.instructor?.avatar || null,
+    instructor_name: instName || null,
+    // Handle disembunyikan kalau isinya sama dengan nama yang sudah tampil
+    instructor_username: instUsername && instUsername !== instName ? instUsername : null,
+    instructor_bio: String(inst?.bio || '').trim() || null,
+    instructor_avatar: normalizeMediaUrl(inst?.profile_photo_url) || c.instructor_avatar || null,
     rate: c.rating_avg ?? c.rate ?? c.rating ?? null,
     totalRates: c.rating_count ?? c.totalRates ?? null,
     totalEnrolments: c.buyers_count ?? c.totalEnrolments ?? null,
@@ -181,10 +207,9 @@ const mapLesson = (l, moduleId) => ({
 
 const parseLessonsResponse = (data, fallbackChapters) => {
   const chaptersFromResponse = Array.isArray(data?.chapters) ? data.chapters : null
-  const source = chaptersFromResponse || null
 
-  if (source) {
-    const mods = buildModulesFromChapters(source)
+  if (chaptersFromResponse) {
+    const mods = buildModulesFromChapters(chaptersFromResponse)
     const flat = mods.flatMap((m) =>
       [...(m.lessons || [])]
         .sort((a, b) => (a?.order ?? a?.order_index ?? 0) - (b?.order ?? b?.order_index ?? 0))
@@ -224,14 +249,15 @@ const parseLessonsResponse = (data, fallbackChapters) => {
 }
 
 const courseStats = computed(() => {
-  const rating = course.value?.rate == null ? null : Number(course.value.rate)
+  const ratingRaw = Number(course.value?.rate ?? 0)
+  // rating 0 = belum ada penilaian, bukan "nilainya nol"
+  const rating = ratingRaw > 0 ? ratingRaw : null
   const ratingCount = Number(course.value?.totalRates ?? 0)
   const buyers = Number(course.value?.totalEnrolments ?? 0)
   const durationMinutes = lessons.value.reduce((sum, l) => sum + (Number(l?.duration ?? 0) || 0), 0)
   return { rating, ratingCount, buyers, durationMinutes }
 })
 
-// Progress keseluruhan course, ditampilkan di sidebar
 const progressPercent = computed(() => {
   const total = lessons.value.length
   if (!total) return 0
@@ -330,7 +356,7 @@ const toggleModule = (moduleId) => {
 
 const selectLesson = (lesson) => {
   currentLesson.value = lesson
-  playerActive.value = false // kembali ke thumbnail saat ganti lesson
+  playerActive.value = false
   completeError.value = null
   questionsError.value = null
   showAskSuccess.value = false
@@ -485,8 +511,6 @@ const youTubeId = computed(() => getYouTubeId(playUrl.value))
 const isYouTube = computed(() => !!youTubeId.value)
 const isVideoFile = computed(() => !!playUrl.value && !isYouTube.value)
 
-// youtube-nocookie + rel=0 (tanpa video channel lain di akhir) + modestbranding.
-// Overlay di template menutup area judul & logo supaya klik tidak lolos ke YouTube.
 const youtubeEmbedSrc = computed(() =>
   youTubeId.value
     ? `https://www.youtube-nocookie.com/embed/${youTubeId.value}?rel=0&modestbranding=1&playsinline=1&autoplay=1&iv_load_policy=3`
@@ -497,7 +521,6 @@ const activatePlayer = () => {
   if (playUrl.value) playerActive.value = true
 }
 
-// Navigasi rekomendasi: pakai path literal agar tidak bergantung pada nama route
 const courseLink = (c) => `/course/${c.id || c.slug}`
 const recThumb = (c) =>
   c.thumbnail_url || c.image || c.thumbnail || c.featured_image || recommendedCourse1Src
@@ -506,18 +529,8 @@ const recThumb = (c) =>
 <template>
   <div class="w-full max-w-none mx-auto bg-white overflow-x-hidden">
     <AppHeader :is-authenticated="isAuthenticated" :user="auth.user" @logout="logout" />
-    <SuccessModal
-      :show="showAskSuccess"
-      title="Berhasil"
-      :message="askSuccessMessage"
-      @close="showAskSuccess = false"
-    />
-    <ErrorModal
-      :show="showAskError"
-      title="Gagal Mengirim Pertanyaan"
-      :error="askError"
-      @close="showAskError = false"
-    />
+    <SuccessModal :show="showAskSuccess" title="Berhasil" :message="askSuccessMessage" @close="showAskSuccess = false" />
+    <ErrorModal :show="showAskError" title="Gagal Mengirim Pertanyaan" :error="askError" @close="showAskError = false" />
 
     <section id="main-content" class="pb-16">
       <!-- ===== Skeleton shimmer ===== -->
@@ -534,6 +547,9 @@ const recThumb = (c) =>
             <div class="h-20 w-28 rounded-2xl shimmer"></div>
             <div class="h-20 w-28 rounded-2xl shimmer"></div>
             <div class="h-20 w-32 rounded-2xl shimmer"></div>
+          </div>
+          <div class="px-4 lg:px-16 pb-6">
+            <div class="h-28 w-full rounded-2xl shimmer"></div>
           </div>
           <div class="px-4 lg:px-16 space-y-3">
             <div class="h-4 w-full rounded shimmer"></div>
@@ -578,7 +594,6 @@ const recThumb = (c) =>
         <main class="min-w-0">
           <!-- Player -->
           <div class="relative bg-black w-full aspect-video overflow-hidden">
-            <!-- Facade: thumbnail + tombol play. Iframe baru dimuat setelah diklik. -->
             <button
               v-if="!playerActive"
               type="button"
@@ -620,8 +635,7 @@ const recThumb = (c) =>
               ></iframe>
               <video v-else-if="isVideoFile" class="absolute inset-0 w-full h-full" :src="playUrl" controls controlsList="nodownload" disablePictureInPicture></video>
 
-              <!-- Penahan klik: menutup area judul (atas) dan logo YouTube (kanan bawah)
-                   supaya user tetap menonton di dalam situs Byzan. -->
+              <!-- Penahan klik: menutup area judul (atas) dan logo YouTube (kanan bawah) -->
               <template v-if="isYouTube">
                 <div class="yt-guard yt-guard--top" aria-hidden="true"></div>
                 <div class="yt-guard yt-guard--logo" aria-hidden="true"></div>
@@ -669,10 +683,9 @@ const recThumb = (c) =>
             </div>
           </div>
 
-          <!-- Instruktur + statistik: satu baris -->
+          <!-- Instruktur ringkas + statistik -->
           <div class="px-4 lg:px-16 pt-6">
             <div class="flex flex-wrap items-stretch gap-3">
-              <!-- Instruktur (dari field `instructor_name` backend) -->
               <div class="flex items-center gap-3 bg-gradient-to-r from-[#009444] to-[#0a7a3c] text-white rounded-2xl px-4 py-3 min-w-[240px] flex-1 sm:flex-none">
                 <img
                   v-if="course.instructor_avatar"
@@ -694,7 +707,6 @@ const recThumb = (c) =>
                 </span>
               </div>
 
-              <!-- Rating -->
               <div class="stat-card">
                 <span class="stat-value">
                   {{ courseStats.rating != null ? Number(courseStats.rating).toFixed(1) : '—' }}
@@ -705,22 +717,84 @@ const recThumb = (c) =>
                 <span class="stat-label">{{ courseStats.ratingCount }} peringkat</span>
               </div>
 
-              <!-- Peserta -->
               <div class="stat-card">
                 <span class="stat-value">{{ courseStats.buyers }}</span>
                 <span class="stat-label">Peserta</span>
               </div>
 
-              <!-- Durasi -->
               <div class="stat-card">
                 <span class="stat-value">{{ formatCourseDuration(courseStats.durationMinutes) }}</span>
                 <span class="stat-label">Total durasi</span>
               </div>
 
-              <!-- Progress -->
               <div class="stat-card">
                 <span class="stat-value">{{ progressPercent }}%</span>
                 <span class="stat-label">{{ completedCount }}/{{ lessons.length }} lesson</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- ===== Profil pengajar lengkap ===== -->
+          <div v-if="course.instructor_name" class="px-4 lg:px-16 pt-6">
+            <div class="rounded-2xl border border-gray-200 bg-gradient-to-br from-gray-50 to-white p-5 md:p-6">
+              <p class="font-montserrat text-[11px] font-bold uppercase tracking-wider text-[#009444] m-0 mb-4">
+                Pengajar Materi Ini
+              </p>
+
+              <div class="flex flex-col sm:flex-row gap-4">
+                <div class="shrink-0">
+                  <img
+                    v-if="course.instructor_avatar"
+                    :src="course.instructor_avatar"
+                    :alt="course.instructor_name"
+                    class="w-16 h-16 rounded-full object-cover ring-4 ring-white shadow-md bg-gray-100"
+                    loading="lazy"
+                  />
+                  <div
+                    v-else
+                    class="w-16 h-16 rounded-full bg-[#009444]/10 text-[#009444] ring-4 ring-white shadow-md flex items-center justify-center font-montserrat text-xl font-bold"
+                    aria-hidden="true"
+                  >
+                    {{ initialOf(course.instructor_name) }}
+                  </div>
+                </div>
+
+                <div class="min-w-0 flex-1">
+                  <h3 class="font-montserrat text-base md:text-lg font-bold text-gray-900 m-0 leading-snug">
+                    {{ course.instructor_name }}
+                  </h3>
+                  <p v-if="course.instructor_username" class="font-montserrat text-xs text-gray-500 m-0 mt-0.5">
+                    @{{ course.instructor_username }}
+                  </p>
+
+                  <p v-if="course.instructor_bio" class="font-montserrat text-sm text-gray-600 leading-relaxed m-0 mt-2.5">
+                    {{ course.instructor_bio }}
+                  </p>
+                  <p v-else class="font-montserrat text-sm text-gray-400 italic m-0 mt-2.5">
+                    Pengajar belum menambahkan deskripsi.
+                  </p>
+
+                  <div class="flex flex-wrap items-center gap-x-4 gap-y-2 mt-3.5 pt-3.5 border-t border-gray-200">
+                    <span class="inline-flex items-center gap-1.5 font-montserrat text-xs font-semibold text-gray-600">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4 text-gray-400">
+                        <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" /><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
+                      </svg>
+                      {{ lessons.length }} lesson
+                    </span>
+                    <span v-if="courseStats.durationMinutes" class="inline-flex items-center gap-1.5 font-montserrat text-xs font-semibold text-gray-600">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4 text-gray-400">
+                        <circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" />
+                      </svg>
+                      {{ formatCourseDuration(courseStats.durationMinutes) }}
+                    </span>
+                    <span v-if="courseStats.buyers" class="inline-flex items-center gap-1.5 font-montserrat text-xs font-semibold text-gray-600">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4 text-gray-400">
+                        <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+                      </svg>
+                      {{ courseStats.buyers }} peserta
+                    </span>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -781,7 +855,6 @@ const recThumb = (c) =>
                   </div>
                 </form>
 
-                <!-- Skeleton shimmer untuk Q&A -->
                 <div v-if="questionsLoading" class="flex flex-col gap-3" aria-hidden="true">
                   <div v-for="n in 2" :key="`q-sk-${n}`" class="rounded-xl bg-gray-50 p-4">
                     <div class="flex items-center justify-between gap-3 mb-3">
@@ -816,7 +889,7 @@ const recThumb = (c) =>
                     <div v-if="q.answer" class="mt-3 border-l-4 border-[#009444] bg-white rounded-r-lg pl-3 pr-3 py-2">
                       <div class="flex items-center justify-between gap-3 mb-1">
                         <span class="font-montserrat text-xs text-[#009444] font-bold">
-                          {{ formatUserName(q.answered_by) || 'Admin' }}
+                          {{ q.answered_by ? formatUserName(q.answered_by) : (course.instructor_name || 'Pengajar') }}
                         </span>
                         <span class="font-montserrat text-[11px] text-gray-500">{{ formatDateTime(q.answered_at) }}</span>
                       </div>
@@ -832,7 +905,6 @@ const recThumb = (c) =>
         <!-- ===== Sidebar ===== -->
         <aside class="bg-white border-t lg:border-t-0 lg:border-l border-gray-200 min-w-0">
           <div class="p-5 lg:sticky lg:top-5">
-            <!-- Progress -->
             <div class="mb-6">
               <div class="flex items-baseline justify-between mb-2">
                 <h2 class="m-0 font-montserrat text-sm font-bold text-gray-900">Progress Belajar</h2>
@@ -846,7 +918,6 @@ const recThumb = (c) =>
               </p>
             </div>
 
-            <!-- Daftar bab -->
             <div class="flex flex-col gap-1.5">
               <div v-for="m in modules" :key="m.id" class="rounded-xl overflow-hidden border border-gray-200">
                 <button
@@ -909,7 +980,6 @@ const recThumb = (c) =>
               </div>
             </div>
 
-            <!-- Rekomendasi -->
             <div v-if="recommendedCourses.length" class="mt-8">
               <h2 class="m-0 mb-3 font-montserrat text-sm font-bold text-gray-900">Rekomendasi Kursus</h2>
               <div class="flex flex-col gap-3">
@@ -951,7 +1021,6 @@ const recThumb = (c) =>
 </template>
 
 <style scoped>
-/* ===== Shimmer ===== */
 .shimmer,
 .shimmer-dark {
   position: relative;
@@ -976,35 +1045,22 @@ const recThumb = (c) =>
 }
 @keyframes shimmer { 100% { transform: translateX(100%); } }
 
-/* ===== Penahan klik pada player YouTube =====
-   Iframe milik domain lain, jadi isinya tidak bisa dimodifikasi. Dua lapisan
-   transparan ini menutup area judul (atas) dan logo YouTube (kanan bawah)
-   agar klik di sana tidak membuka youtube.com di tab baru.
-   Area kontrol (play, volume, seek, fullscreen) sengaja dibiarkan bebas. */
+/* Penahan klik pada player YouTube: iframe milik domain lain, jadi isinya
+   tidak bisa dimodifikasi. Dua lapisan transparan ini menutup area judul
+   (atas) dan logo YouTube (kanan bawah). Kontrol dibiarkan bebas. */
 .yt-guard {
   position: absolute;
   z-index: 5;
   background: transparent;
   cursor: default;
 }
-.yt-guard--top {
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 62px;
-}
-.yt-guard--logo {
-  right: 0;
-  bottom: 34px;
-  width: 108px;
-  height: 34px;
-}
+.yt-guard--top { top: 0; left: 0; right: 0; height: 62px; }
+.yt-guard--logo { right: 0; bottom: 34px; width: 108px; height: 34px; }
 @media (max-width: 640px) {
   .yt-guard--top { height: 46px; }
   .yt-guard--logo { bottom: 28px; width: 84px; height: 28px; }
 }
 
-/* ===== Stat cards ===== */
 .stat-card {
   display: flex;
   flex-direction: column;
@@ -1035,22 +1091,15 @@ const recThumb = (c) =>
   color: #6b7280;
 }
 
-/* ===== Accordion ===== */
 .accordion-enter-active,
 .accordion-leave-active {
   transition: all 0.28s cubic-bezier(0.4, 0, 0.2, 1);
   overflow: hidden;
 }
 .accordion-enter-from,
-.accordion-leave-to {
-  opacity: 0;
-  max-height: 0;
-}
+.accordion-leave-to { opacity: 0; max-height: 0; }
 .accordion-enter-to,
-.accordion-leave-from {
-  opacity: 1;
-  max-height: 900px;
-}
+.accordion-leave-from { opacity: 1; max-height: 900px; }
 
 .line-clamp-2 {
   display: -webkit-box;
@@ -1068,24 +1117,9 @@ const recThumb = (c) =>
 
 <style>
 /* Konten materi dari CMS (v-html) — tidak scoped supaya style-nya kena */
-.course-content h1 {
-  font-family: 'Montserrat', sans-serif;
-  font-size: 28px;
-  font-weight: 700;
-  margin: 24px 0 12px;
-}
-.course-content h2 {
-  font-family: 'Montserrat', sans-serif;
-  font-size: 22px;
-  font-weight: 700;
-  margin: 20px 0 10px;
-}
-.course-content h3 {
-  font-family: 'Montserrat', sans-serif;
-  font-size: 18px;
-  font-weight: 700;
-  margin: 16px 0 8px;
-}
+.course-content h1 { font-family: 'Montserrat', sans-serif; font-size: 28px; font-weight: 700; margin: 24px 0 12px; }
+.course-content h2 { font-family: 'Montserrat', sans-serif; font-size: 22px; font-weight: 700; margin: 20px 0 10px; }
+.course-content h3 { font-family: 'Montserrat', sans-serif; font-size: 18px; font-weight: 700; margin: 16px 0 8px; }
 .course-content p {
   font-family: 'Comfortaa', cursive;
   font-size: 15px;
@@ -1106,15 +1140,6 @@ const recThumb = (c) =>
 .course-content ul { list-style-type: disc; }
 .course-content ol { list-style-type: decimal; }
 .course-content ul li { list-style-type: disc; }
-.course-content a {
-  color: #009444;
-  text-decoration: underline;
-  font-weight: 600;
-}
-.course-content img {
-  max-width: 100%;
-  height: auto;
-  border-radius: 12px;
-  margin: 16px 0;
-}
+.course-content a { color: #009444; text-decoration: underline; font-weight: 600; }
+.course-content img { max-width: 100%; height: auto; border-radius: 12px; margin: 16px 0; }
 </style>
