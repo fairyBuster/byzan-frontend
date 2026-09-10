@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useAuthStore } from "../../stores/auth";
 import AppHeader from "../../components/AppHeader.vue";
@@ -9,6 +9,7 @@ import api from "../../services/api";
 import CardArticle from "./CardArticle.vue";
 import SuccessModal from "../../components/SuccessModal.vue";
 import ErrorModal from "../../components/ErrorModal.vue";
+import ErrorState from "../../components/ErrorState.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -50,33 +51,17 @@ const normalizeMediaUrl = (url) => {
   return path.startsWith("/") ? `${API_ORIGIN}${path}` : `${API_ORIGIN}/${path}`;
 };
 
-// Categories
 const categories = ref([]);
 
-// Asset URLs
-const heroImageSrc = getAssetUrl("daeb9afe8aebd8556996bfa0833246d5028a91c4.jpeg");
-const authorAvatarSrc = getAssetUrl("331_3.svg");
-const starIconSrc = getAssetUrl("ae82f0fc275cc9614de9be18a7b57f7d24b16b0d.png");
-const quoteIconSrc = getAssetUrl("2a6f6ff0084482b1a5764d9085c850e6e3603844.png");
 const shareIconSrc = getAssetUrl("302df890445600c802bb7578df1f7711f87104a0.png");
 const replyArrowSrc = getAssetUrl("c7c104945c9f6515191c5d535a892383f03d3f3c.png");
-const courseImageSrc = getAssetUrl("f72456441df4efd0eb5ecfda62f6b31c8d4550ef.png");
-const moreIconSrc = getAssetUrl("aee2435b15a9cce768a68b112f666ce2dce167d6.png");
-const postBgImageSrc = getAssetUrl("225af3722f1df4cd0f5e6f2971ee059fa2da3e75.png");
-
-// Related post images
-const relatedPostImages = [
-  { bg: postBgImageSrc, main: getAssetUrl("1eb5de3a3867ea93bd81861d06ccae3d18edf967.png") },
-  { bg: postBgImageSrc, main: getAssetUrl("fae23bb4188728f84d6eb8c1388ad51a8488ffac.png") },
-  { bg: postBgImageSrc, main: getAssetUrl("6ae8f60de6196d73aa8e6441c6e3a837b224c3f5.png") },
-];
 
 const toDisplayDate = (iso) => {
-  if (!iso) return ""
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return String(iso)
-  return d.toLocaleDateString("id-ID", { year: "numeric", month: "long", day: "numeric" })
-}
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  return d.toLocaleDateString("id-ID", { year: "numeric", month: "long", day: "numeric" });
+};
 
 const escapeHtml = (s) => String(s ?? "")
   .replace(/&/g, "&amp;")
@@ -99,73 +84,88 @@ const formattedContentHtml = computed(() => {
   return formatPlainTextToHtml(raw);
 });
 
-// Estimasi waktu baca ala Udemy/Medium
 const readingTime = computed(() => {
   let text = "";
   if (Array.isArray(article.value?.body)) {
-    text = article.value.body.map(b => b.content || "").join(" ");
+    text = article.value.body.map((b) => b.content || "").join(" ");
   } else {
     text = String(article.value?.content || "");
   }
   const words = text.replace(/<[^>]+>/g, " ").trim().split(/\s+/).filter(Boolean).length;
-  const mins = Math.max(1, Math.round(words / 200));
-  return mins;
+  return Math.max(1, Math.round(words / 200));
 });
 
-onMounted(async () => {
+const fetchCategories = async () => {
   try {
-    loading.value = true;
-    const articleId = route.params.id;
+    const { data } = await api.get("/posts/categories/");
+    categories.value = Array.isArray(data) ? data : data?.results || [];
+  } catch (e) {
+    categories.value = [];
+  }
+};
+
+const loadArticle = async (articleId) => {
+  if (!articleId) return;
+
+  loading.value = true;
+  error.value = null;
+  article.value = null;
+  relatedPosts.value = [];
+  comments.value = [];
+  commentText.value = "";
+  myPostRating.value = 0;
+
+  try {
+    const { data } = await api.get(`/posts/id/${articleId}/`);
+    article.value = {
+      ...data,
+      thumbnail: normalizeMediaUrl(data?.thumbnail_url || data?.thumbnail) || data?.thumbnail || null,
+      date: toDisplayDate(data?.published_at || data?.created_at),
+    };
+    await fetchPostComments();
 
     try {
-      const { data } = await api.get("/posts/categories/");
-      categories.value = Array.isArray(data) ? data : data?.results || [];
+      const params = {};
+      const slug = data?.category?.slug || null;
+      if (slug) params.category = slug;
+      const { data: relatedData } = await api.get("/posts/", { params });
+      const list = Array.isArray(relatedData) ? relatedData : relatedData?.results || [];
+      relatedPosts.value = list
+        .filter((p) => String(p.id) !== String(articleId))
+        .slice(0, 3)
+        .map((p) => ({
+          ...p,
+          date: toDisplayDate(p?.published_at || p?.created_at),
+          thumbnail: normalizeMediaUrl(p?.thumbnail_url || p?.thumbnail) || p?.thumbnail || null,
+        }));
     } catch (e) {
-      categories.value = [];
-    }
-
-    try {
-      const { data } = await api.get(`/posts/id/${articleId}/`);
-      article.value = {
-        ...data,
-        thumbnail: normalizeMediaUrl(data?.thumbnail_url || data?.thumbnail) || data?.thumbnail || null,
-        date: toDisplayDate(data?.published_at || data?.created_at),
-        rating_avg: data?.rating_avg ?? 0,
-        rating_count: data?.rating_count ?? 0,
-      };
-      await fetchPostComments();
-
-      try {
-        const params = {};
-        const slug = data?.category?.slug || null;
-        if (slug) params.category = slug;
-        const { data: relatedData } = await api.get("/posts/", { params });
-        const list = Array.isArray(relatedData) ? relatedData : relatedData?.results || [];
-        relatedPosts.value = list
-          .filter((p) => String(p.id) !== String(articleId))
-          .slice(0, 3)
-          .map((p) => ({
-            ...p,
-            thumbnail: normalizeMediaUrl(p?.thumbnail_url || p?.thumbnail) || p?.thumbnail || null,
-          }));
-      } catch (e) {
-        relatedPosts.value = [];
-      }
-    } catch (e) {
-      error.value = e.response?.data?.message || e.message || "Gagal memuat artikel";
-      article.value = null;
       relatedPosts.value = [];
-      comments.value = [];
     }
   } catch (e) {
-    error.value = e.message || "Gagal memuat artikel";
+    error.value = e;
     article.value = null;
     relatedPosts.value = [];
     comments.value = [];
   } finally {
     loading.value = false;
   }
+};
+
+onMounted(async () => {
+  await fetchCategories();
+  await loadArticle(route.params.id);
 });
+
+// PENTING: klik "Artikel Terkait" hanya mengubah route param, komponen di-reuse.
+// Tanpa watch ini konten artikel tidak akan berganti.
+watch(
+  () => route.params.id,
+  async (newId, oldId) => {
+    if (!newId || newId === oldId) return;
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    await loadArticle(newId);
+  }
+);
 
 const categoriesMapById = computed(() => {
   const map = {};
@@ -287,11 +287,13 @@ const fetchPostComments = async () => {
   }
 };
 
-const authorName = computed(() => {
-  const a = article.value?.author;
-  if (typeof a === "number") return `Author #${a}`;
-  return a?.username || a?.email || "Author";
-});
+const goBack = () => {
+  if (window.history.state?.back) {
+    router.back();
+  } else {
+    router.push("/byzanpost");
+  }
+};
 </script>
 
 <template>
@@ -301,70 +303,105 @@ const authorName = computed(() => {
     <ErrorModal :show="showPostError" title="Gagal" :message="postErrorMessage" @close="showPostError = false" />
 
     <main>
-      <!-- Loading -->
-      <div v-if="loading" class="max-w-[760px] mx-auto px-4 py-16">
-        <div class="h-8 w-3/4 rounded shimmer"></div>
-        <div class="h-4 w-1/2 rounded shimmer mt-4"></div>
-        <div class="h-[320px] w-full rounded-2xl shimmer mt-8"></div>
-        <div class="h-4 w-full rounded shimmer mt-8"></div>
-        <div class="h-4 w-full rounded shimmer mt-3"></div>
-        <div class="h-4 w-5/6 rounded shimmer mt-3"></div>
-      </div>
-
-      <!-- Error -->
-      <div v-else-if="error" class="max-w-[600px] mx-auto px-4 py-20">
-        <div class="bg-red-50 border border-red-200 rounded-2xl px-6 py-8 text-center">
-          <h2 class="text-lg font-bold text-red-700 mb-1">Gagal memuat artikel</h2>
-          <p class="text-sm text-red-600 mb-5">{{ error }}</p>
-          <router-link to="/byzanpost" class="inline-block bg-primary text-white px-5 py-2.5 rounded-lg font-semibold">
-            Kembali ke ByzanPost
-          </router-link>
-        </div>
-      </div>
-
-      <!-- Article (Udemy-style readable single column) -->
-      <template v-else-if="article">
-        <!-- Hero header -->
+      <!-- ===== Loading skeleton ===== -->
+      <template v-if="loading">
         <header class="border-b border-gray-100">
-          <div class="max-w-[760px] mx-auto px-4 pt-10 md:pt-14 pb-8">
-            <router-link to="/byzanpost" class="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-primary transition-colors mb-6">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="m15 18-6-6 6-6" /></svg>
-              Semua Artikel
-            </router-link>
+          <div class="max-w-[760px] mx-auto px-4 pt-6 md:pt-10 pb-8">
+            <div class="h-10 w-36 rounded-full shimmer mb-6"></div>
+            <div class="h-6 w-24 rounded-full shimmer mb-4"></div>
+            <div class="h-9 md:h-11 w-full rounded shimmer"></div>
+            <div class="h-9 md:h-11 w-2/3 rounded shimmer mt-3"></div>
+            <div class="h-4 w-52 rounded shimmer mt-6"></div>
+          </div>
+          <div class="max-w-[900px] mx-auto px-4 pb-2">
+            <div class="w-full aspect-[16/8] rounded-2xl shimmer"></div>
+          </div>
+        </header>
 
-            <span class="inline-block bg-[#64fb5f] text-black px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wide mb-4">
-              {{ displayCategoryName(article.category) }}
-            </span>
+        <div class="max-w-[760px] mx-auto px-4 py-10 md:py-14">
+          <div v-for="n in 5" :key="`body-skel-${n}`" class="mb-5">
+            <div class="h-4 w-full rounded shimmer"></div>
+            <div class="h-4 w-full rounded shimmer mt-2.5"></div>
+            <div class="h-4 w-4/5 rounded shimmer mt-2.5"></div>
+          </div>
+        </div>
 
-            <h1 class="text-3xl md:text-4xl lg:text-[2.75rem] font-extrabold text-gray-900 leading-[1.15] tracking-tight mb-6">
-              {{ article.title }}
-            </h1>
+        <div class="max-w-[760px] mx-auto px-4 pb-14">
+          <div class="h-7 w-40 rounded shimmer mb-6"></div>
+          <div class="h-[180px] w-full rounded-2xl shimmer"></div>
+        </div>
 
-            <!-- Meta row -->
-            <div class="flex items-center gap-3 flex-wrap text-sm text-gray-600">
-              <div class="flex items-center gap-2.5">
-                <img :src="article.author?.avatar || authorAvatarSrc" :alt="authorName" class="w-10 h-10 rounded-full object-cover ring-2 ring-gray-100" />
-                <div class="leading-tight text-left">
-                  <p class="font-semibold text-gray-900 m-0">{{ authorName }}</p>
-                  <p class="text-xs text-gray-500 m-0">{{ article.date || "19 Juli 2025" }} · {{ readingTime }} min baca</p>
+        <div class="bg-gray-50 border-t border-gray-100 py-14">
+          <div class="max-w-[1200px] mx-auto px-4">
+            <div class="h-7 w-44 rounded shimmer mb-6"></div>
+            <div class="grid gap-6 md:gap-8 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
+              <div v-for="n in 3" :key="`rel-skel-${n}`" class="rounded-2xl overflow-hidden bg-white border border-gray-200">
+                <div class="h-52 shimmer"></div>
+                <div class="p-5">
+                  <div class="h-5 w-3/4 rounded shimmer"></div>
+                  <div class="h-3 w-full rounded shimmer mt-3"></div>
+                  <div class="h-3 w-2/3 rounded shimmer mt-2"></div>
                 </div>
-              </div>
-              <span class="text-gray-300">•</span>
-              <div class="flex items-center gap-1.5">
-                <img :src="starIconSrc" alt="Rating" class="w-5 h-5" />
-                <span class="font-semibold text-gray-900">{{ Number(article.rating_avg ?? 0).toFixed(1) }}</span>
-                <span class="text-gray-400">({{ article.rating_count ?? 0 }})</span>
               </div>
             </div>
           </div>
+        </div>
+      </template>
 
-          <!-- Featured image full-bleed within reading width -->
+      <!-- ===== Error ===== -->
+      <div v-else-if="error" class="py-16">
+        <ErrorState :error="error" :loading="loading" @retry="loadArticle(route.params.id)">
+          <template #actions>
+            <router-link to="/byzanpost" class="inline-flex items-center rounded-lg px-5 py-2.5 font-montserrat font-semibold text-sm border border-gray-200 text-gray-700 hover:bg-gray-50 transition-colors">
+              Semua Artikel
+            </router-link>
+          </template>
+        </ErrorState>
+      </div>
+
+      <!-- ===== Article ===== -->
+      <template v-else-if="article">
+        <header class="border-b border-gray-100">
+          <div class="max-w-[760px] mx-auto px-4 pt-6 md:pt-10 pb-8">
+            <!-- Tombol kembali: pill jelas, bukan teks polos yang nempel badge -->
+            <button
+              type="button"
+              @click="goBack"
+              class="group inline-flex items-center gap-2 mb-6 pl-3 pr-4 py-2 rounded-full border border-gray-200 bg-white text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50 hover:border-gray-300 hover:text-primary transition-all cursor-pointer"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4 group-hover:-translate-x-0.5 transition-transform">
+                <path d="m15 18-6-6 6-6" />
+              </svg>
+              Semua Artikel
+            </button>
+
+            <!-- Kategori di baris sendiri -->
+            <div class="mb-4">
+              <span class="inline-block bg-[#64fb5f] text-black px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wide">
+                {{ displayCategoryName(article.category) }}
+              </span>
+            </div>
+
+            <h1 class="text-3xl md:text-4xl lg:text-[2.75rem] font-extrabold text-gray-900 leading-[1.15] tracking-tight mb-5">
+              {{ article.title }}
+            </h1>
+
+            <!-- Meta: tanggal + waktu baca saja -->
+            <div class="flex items-center gap-2 text-sm text-gray-500">
+              <span>{{ article.date }}</span>
+              <span class="text-gray-300">·</span>
+              <span>{{ readingTime }} min baca</span>
+            </div>
+          </div>
+
           <div class="max-w-[900px] mx-auto px-4 pb-2">
             <img
-              :src="article.thumbnail || article.featured_image || article.heroImage || article.image || heroImageSrc"
+              v-if="article.thumbnail || article.featured_image || article.heroImage || article.image"
+              :src="article.thumbnail || article.featured_image || article.heroImage || article.image"
               :alt="article.title"
               class="w-full aspect-[16/8] object-cover rounded-2xl shadow-sm"
             />
+            <div v-else class="w-full aspect-[16/8] rounded-2xl bg-gray-100"></div>
           </div>
         </header>
 
@@ -380,7 +417,6 @@ const authorName = computed(() => {
             <div v-else v-html="formattedContentHtml"></div>
           </div>
 
-          <!-- Share row -->
           <div class="flex items-center gap-3 mt-10 pt-6 border-t border-gray-100">
             <span class="text-sm font-medium text-gray-500">Bagikan:</span>
             <button class="w-9 h-9 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition-colors" aria-label="Bagikan">
@@ -396,7 +432,6 @@ const authorName = computed(() => {
             <span class="text-gray-400 font-medium text-lg">({{ comments.length }})</span>
           </h2>
 
-          <!-- Comment form -->
           <form class="bg-gray-50 rounded-2xl p-5 md:p-6 mb-10 border border-gray-100" @submit.prevent="handleSubmitComment">
             <label class="block text-sm font-semibold text-gray-700 mb-2">Beri rating &amp; komentar</label>
             <div class="flex items-center gap-1 mb-3">
@@ -423,7 +458,6 @@ const authorName = computed(() => {
             </div>
           </form>
 
-          <!-- Comment list -->
           <div v-if="!isAuthenticated" class="text-center py-10 bg-gray-50 rounded-2xl border border-gray-100">
             <p class="text-gray-500 mb-4">Login dulu untuk melihat &amp; menulis komentar.</p>
             <button
@@ -433,7 +467,16 @@ const authorName = computed(() => {
               Login
             </button>
           </div>
-          <div v-else-if="commentsLoading" class="text-center py-10 text-gray-500">Memuat komentar...</div>
+          <div v-else-if="commentsLoading" class="flex flex-col gap-5">
+            <div v-for="n in 2" :key="`cmt-skel-${n}`" class="flex gap-3.5">
+              <div class="shrink-0 w-10 h-10 rounded-full shimmer"></div>
+              <div class="flex-1">
+                <div class="h-4 w-32 rounded shimmer"></div>
+                <div class="h-3 w-full rounded shimmer mt-2.5"></div>
+                <div class="h-3 w-3/4 rounded shimmer mt-2"></div>
+              </div>
+            </div>
+          </div>
           <div v-else-if="commentsError" class="text-center py-6 px-4 bg-red-50 border border-red-200 rounded-xl text-red-600 text-sm">{{ commentsError }}</div>
           <div v-else-if="comments.length === 0" class="text-center py-12 bg-gray-50 rounded-2xl border border-gray-100">
             <p class="text-gray-500 m-0">Belum ada komentar.</p>
@@ -460,35 +503,20 @@ const authorName = computed(() => {
           </div>
         </section>
 
-        <!-- ===== Rekomendasi (dipindah ke bawah, full width, clean) ===== -->
-        <section class="bg-gray-50 border-t border-gray-100 py-14 md:py-16">
+        <!-- Artikel Terkait -->
+        <section v-if="relatedPosts.length" class="bg-gray-50 border-t border-gray-100 py-14 md:py-16">
           <div class="max-w-[1200px] mx-auto px-4">
-            <!-- Course CTA banner -->
-            <div class="flex flex-col md:flex-row items-center gap-6 bg-white rounded-2xl border border-gray-200 shadow-sm p-5 md:p-6 mb-12">
-              <img :src="courseImageSrc" alt="Kursus Nahwu" class="w-full md:w-56 h-40 md:h-32 object-cover rounded-xl shrink-0" />
-              <div class="flex-1 text-center md:text-left">
-                <h3 class="font-bold text-xl md:text-2xl text-primary mb-1">Kursus Nahwu</h3>
-                <p class="text-gray-600 text-sm md:text-base">Pelajari tata bahasa Arab dari dasar — gratis untuk memulai.</p>
-              </div>
-              <router-link to="/byzanpost" class="inline-flex items-center justify-center bg-primary hover:opacity-90 text-white px-6 py-3 rounded-xl font-semibold transition-opacity whitespace-nowrap w-full md:w-auto">
-                Mulai Belajar
-              </router-link>
+            <div class="flex items-center justify-between mb-6">
+              <h2 class="text-2xl font-bold text-gray-900">Artikel Terkait</h2>
+              <router-link to="/byzanpost" class="text-sm font-semibold text-primary hover:underline">Lihat semua →</router-link>
             </div>
-
-            <div v-if="relatedPosts.length" >
-              <div class="flex items-center justify-between mb-6">
-                <h2 class="text-2xl font-bold text-gray-900">Artikel Terkait</h2>
-                <router-link to="/byzanpost" class="text-sm font-semibold text-primary hover:underline">Lihat semua →</router-link>
-              </div>
-              <div class="grid gap-8 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
-                <CardArticle
-                  v-for="post in relatedPosts"
-                  :key="post.id"
-                  :article="post"
-                  :article-images="relatedPostImages.map((i) => i.main || i.bg)"
-                  :display-category-name="displayCategoryName"
-                />
-              </div>
+            <div class="grid gap-6 md:gap-8 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
+              <CardArticle
+                v-for="post in relatedPosts"
+                :key="post.id"
+                :article="post"
+                :display-category-name="displayCategoryName"
+              />
             </div>
           </div>
         </section>
@@ -515,7 +543,7 @@ const authorName = computed(() => {
 }
 @keyframes shimmer { 100% { transform: translateX(100%); } }
 
-/* Udemy/Medium-style reading typography */
+/* Reading typography */
 .article-prose {
   font-size: 1.125rem;
   line-height: 1.85;

@@ -30,7 +30,7 @@ const modulesById = ref({})
 const recommendedCourses = ref([])
 const loading = ref(false)
 const error = ref(null)
-const openModules = ref(new Set()) // Track which modules are open
+const openModules = ref(new Set())
 const completingLessonId = ref(null)
 const completeError = ref(null)
 const questions = ref([])
@@ -41,35 +41,23 @@ const asking = ref(false)
 const showAskSuccess = ref(false)
 const showAskError = ref(false)
 const askSuccessMessage = ref('')
-const askErrorMessage = ref('')
+const askError = ref(null)
+
+// Player: tampilkan thumbnail dulu (facade), iframe baru dimuat saat diklik.
+// Ini juga bikin halaman jauh lebih ringan karena iframe YouTube berat.
+const playerActive = ref(false)
 
 const dummyRecommendedCourses = [
-  {
-    id: 2,
-    title: "Kursus Nahwu",
-    image: null,
-    thumbnail: null,
-    featured_image: null
-  },
-  {
-    id: 3,
-    title: "Kurusus Mantiq",
-    image: null,
-    thumbnail: null,
-    featured_image: null
-  }
+  { id: 2, title: 'Kursus Nahwu', image: null, thumbnail: null, featured_image: null },
+  { id: 3, title: 'Kursus Mantiq', image: null, thumbnail: null, featured_image: null },
 ]
 
 // Asset URLs
 const videoThumbnailSrc = getAssetUrl('8de126a496aa3535b193b674681ac3ff0368a390.png')
-const videoControlsSrc = getAssetUrl('8ad04e2f52531bfc929daeb6f0c3501eef56302e.png')
 const instructorAvatarSrc = getAssetUrl('28f5b8e9d2c7d6c0b8900264c40a99813e027bab.png')
-const starIconSrc = getAssetUrl('ae82f0fc275cc9614de9be18a7b57f7d24b16b0d.png')
 const checkedIconSrc = getAssetUrl('016b68354b9cc166fe7e60d6e02b4f4b4d6fccf3.png')
 const recommendedCourse1Src = getAssetUrl('f72456441df4efd0eb5ecfda62f6b31c8d4550ef.png')
-const recommendedCourse2Src = getAssetUrl('8b82b59be50686891c798f549c89a0972e85b15e.png')
 
-// Durasi pelajaran dalam API berupa menit, format label sederhana
 const formatLessonDuration = (minutes) => {
   if (!minutes && minutes !== 0) return '-'
   if (minutes >= 60) {
@@ -80,68 +68,58 @@ const formatLessonDuration = (minutes) => {
   return `${minutes} menit`
 }
 
-// Durasi kursus: menit → label
-const formatCourseDuration = (minutes) => {
-  if (!minutes && minutes !== 0) return '-'
-  if (minutes >= 60) {
-    const h = Math.floor(minutes / 60)
-    const m = minutes % 60
-    return m ? `${h} jam ${m} menit` : `${h} jam`
-  }
-  return `${minutes} menit`
-}
+const formatCourseDuration = formatLessonDuration
 
-// Ekstrak thumbnail YouTube dari video_url
 const getYouTubeId = (url) => {
   if (!url) return null
   try {
     const u = new URL(url)
     const host = u.hostname.replace('www.', '')
-    if (host.includes('youtube.com')) {
-      // youtube.com/watch?v=ID atau youtube.com/embed/ID
+    if (host.includes('youtube.com') || host.includes('youtube-nocookie.com')) {
       const vid = u.searchParams.get('v')
       if (vid) return vid
       const parts = u.pathname.split('/')
       const embedIndex = parts.indexOf('embed')
       if (embedIndex !== -1 && parts[embedIndex + 1]) return parts[embedIndex + 1]
     }
-    if (host === 'youtu.be') {
-      return u.pathname.slice(1)
-    }
+    if (host === 'youtu.be') return u.pathname.slice(1)
   } catch (e) {
-    // abaikan kesalahan parsing
+    // abaikan
   }
   return null
 }
 
 const getYouTubeThumbnail = (url) => {
   const id = getYouTubeId(url)
-  return id ? `https://img.youtube.com/vi/${id}/hqdefault.jpg` : null
+  return id ? `https://img.youtube.com/vi/${id}/maxresdefault.jpg` : null
 }
 
-// Sumber thumbnail utama untuk pemutar
 const thumbnailSrc = computed(() => {
-  const lesson = currentLesson.value
-  const lessonThumb = getYouTubeThumbnail(lesson?.video_url)
+  const lessonThumb = getYouTubeThumbnail(currentLesson.value?.video_url)
   if (lessonThumb) return lessonThumb
   const courseThumbFromVideo = getYouTubeThumbnail(course.value?.video_url)
   if (courseThumbFromVideo) return courseThumbFromVideo
   return course.value?.thumbnail_url || videoThumbnailSrc
 })
 
-// Tidak gunakan sampleCourse; data diambil langsung dari API
+// Fallback kalau maxresdefault tidak tersedia untuk video tersebut
+const onThumbError = (e) => {
+  const id = getYouTubeId(currentLesson.value?.video_url)
+  if (id && !e.target.dataset.fallback) {
+    e.target.dataset.fallback = '1'
+    e.target.src = `https://img.youtube.com/vi/${id}/hqdefault.jpg`
+  } else {
+    e.target.src = videoThumbnailSrc
+  }
+}
 
-// Rekomendasi kursus opsional
-
-const loadCourseData = async (courseId, lessonId, moduleId) => {
+const loadCourseData = async (courseId) => {
   try {
-    const { data: courseData } = await api.get(`/courses/${courseId}/`)
-    return courseData || null
+    const { data } = await api.get(`/courses/${courseId}/`)
+    return data || null
   } catch (e) {
-    console.warn('Failed to fetch course detail from API, using dummy data:', e)
-    // Gunakan data dummy jika API gagal - cari berdasarkan courseId
-    const dummyCourseData = dummyCourses.find(c => c.id === parseInt(courseId)) || dummyCourses[0]
-    return dummyCourseData
+    console.warn('Gagal ambil detail course, pakai data dummy:', e)
+    return dummyCourses.find((c) => c.id === parseInt(courseId)) || dummyCourses[0]
   }
 }
 
@@ -149,12 +127,9 @@ const loadRecommendedCourses = async (courseId) => {
   try {
     const { data } = await api.get('/courses/')
     const list = Array.isArray(data) ? data : (data?.results || [])
-    return list
-      .filter(c => c.id !== parseInt(courseId))
-      .slice(0, 2)
+    return list.filter((c) => c.id !== parseInt(courseId)).slice(0, 3)
   } catch (e) {
-    console.warn('Failed to fetch recommended courses from API, using dummy data:', e)
-    // Gunakan data dummy jika API gagal
+    console.warn('Gagal ambil rekomendasi, pakai data dummy:', e)
     return dummyRecommendedCourses
   }
 }
@@ -171,7 +146,9 @@ const mapCourseFromApi = (c) => {
     price: priceValue,
     is_free: priceValue === 0,
     createdAt: c.created_at || c.createdAt || null,
-    instructor_username: c.instructor_name || c.instructor_username || null,
+    // Field instruktur dari backend: `instructor_name`
+    instructor_name: c.instructor_name || c.instructor_username || c.instructor?.name || null,
+    instructor_avatar: c.instructor_avatar || c.instructor?.avatar || null,
     rate: c.rating_avg ?? c.rate ?? c.rating ?? null,
     totalRates: c.rating_count ?? c.totalRates ?? null,
     totalEnrolments: c.buyers_count ?? c.totalEnrolments ?? null,
@@ -191,46 +168,39 @@ const buildModulesFromChapters = (chapters) => {
     }))
 }
 
+const mapLesson = (l, moduleId) => ({
+  id: l?.id,
+  title: l?.title || '',
+  order_index: l?.order ?? l?.order_index ?? 0,
+  duration: l?.duration_seconds != null ? Math.round(Number(l.duration_seconds) / 60) : (l?.duration ?? null),
+  completed: Boolean(l?.is_completed || l?.completed),
+  content: l?.content || null,
+  video_url: l?.youtube_url || l?.video_url || null,
+  module: moduleId,
+})
+
 const parseLessonsResponse = (data, fallbackChapters) => {
   const chaptersFromResponse = Array.isArray(data?.chapters) ? data.chapters : null
-  if (chaptersFromResponse) {
-    const mods = buildModulesFromChapters(chaptersFromResponse)
-    const flat = mods.flatMap((m) => {
-      const lessonsList = Array.isArray(m.lessons) ? m.lessons : []
-      return [...lessonsList]
+  const source = chaptersFromResponse || null
+
+  if (source) {
+    const mods = buildModulesFromChapters(source)
+    const flat = mods.flatMap((m) =>
+      [...(m.lessons || [])]
         .sort((a, b) => (a?.order ?? a?.order_index ?? 0) - (b?.order ?? b?.order_index ?? 0))
-        .map((l) => ({
-          id: l?.id,
-          title: l?.title || '',
-          order_index: l?.order ?? l?.order_index ?? 0,
-          duration: l?.duration_seconds != null ? Math.round(Number(l.duration_seconds) / 60) : (l?.duration ?? null),
-          completed: Boolean(l?.is_completed || l?.completed),
-          content: l?.content || null,
-          video_url: l?.youtube_url || l?.video_url || null,
-          module: m.id,
-        }))
-    })
+        .map((l) => mapLesson(l, m.id))
+    )
     return { modules: mods, lessons: flat }
   }
 
   const list = Array.isArray(data) ? data : (Array.isArray(data?.results) ? data.results : [])
-  if (!Array.isArray(list) || list.length === 0) {
+  if (!list.length) {
     const mods = buildModulesFromChapters(fallbackChapters)
-    const flat = mods.flatMap((m) => {
-      const lessonsList = Array.isArray(m.lessons) ? m.lessons : []
-      return [...lessonsList]
+    const flat = mods.flatMap((m) =>
+      [...(m.lessons || [])]
         .sort((a, b) => (a?.order ?? a?.order_index ?? 0) - (b?.order ?? b?.order_index ?? 0))
-        .map((l) => ({
-          id: l?.id,
-          title: l?.title || '',
-          order_index: l?.order ?? l?.order_index ?? 0,
-          duration: l?.duration_seconds != null ? Math.round(Number(l.duration_seconds) / 60) : (l?.duration ?? null),
-          completed: Boolean(l?.is_completed || l?.completed),
-          content: l?.content || null,
-          video_url: l?.youtube_url || l?.video_url || null,
-          module: m.id,
-        }))
-    })
+        .map((l) => mapLesson(l, m.id))
+    )
     return { modules: mods, lessons: flat }
   }
 
@@ -245,19 +215,8 @@ const parseLessonsResponse = (data, fallbackChapters) => {
 
   const mappedLessons = list.map((l) => {
     const chapterId = l?.chapter_id || l?.chapter || l?.chapter?.id || 0
-    const chapterTitle = l?.chapter_title || l?.chapter?.title || ''
-    const chapterOrder = l?.chapter_order || l?.chapter?.order || 0
-    ensureModule(chapterId, chapterTitle, chapterOrder)
-    return {
-      id: l?.id,
-      title: l?.title || '',
-      order_index: l?.order ?? l?.order_index ?? 0,
-      duration: l?.duration_seconds != null ? Math.round(Number(l.duration_seconds) / 60) : (l?.duration ?? null),
-      completed: Boolean(l?.is_completed || l?.completed),
-      content: l?.content || null,
-      video_url: l?.youtube_url || l?.video_url || null,
-      module: chapterId,
-    }
+    ensureModule(chapterId, l?.chapter_title || l?.chapter?.title || '', l?.chapter_order || l?.chapter?.order || 0)
+    return mapLesson(l, chapterId)
   })
 
   const mods = [...moduleMap.values()].sort((a, b) => (a.order_index || 0) - (b.order_index || 0))
@@ -265,15 +224,25 @@ const parseLessonsResponse = (data, fallbackChapters) => {
 }
 
 const courseStats = computed(() => {
-  const ratingRaw = course.value?.rate
-  const rating = ratingRaw == null ? null : Number(ratingRaw)
-  const ratingCountRaw = course.value?.totalRates
-  const ratingCount = ratingCountRaw == null ? 0 : Number(ratingCountRaw)
-  const buyersRaw = course.value?.totalEnrolments
-  const buyers = buyersRaw == null ? 0 : Number(buyersRaw)
+  const rating = course.value?.rate == null ? null : Number(course.value.rate)
+  const ratingCount = Number(course.value?.totalRates ?? 0)
+  const buyers = Number(course.value?.totalEnrolments ?? 0)
   const durationMinutes = lessons.value.reduce((sum, l) => sum + (Number(l?.duration ?? 0) || 0), 0)
   return { rating, ratingCount, buyers, durationMinutes }
 })
+
+// Progress keseluruhan course, ditampilkan di sidebar
+const progressPercent = computed(() => {
+  const total = lessons.value.length
+  if (!total) return 0
+  const done = lessons.value.filter((l) => l.completed).length
+  return Math.round((done / total) * 100)
+})
+
+const completedCount = computed(() => lessons.value.filter((l) => l.completed).length)
+
+const lessonsOf = (moduleId) =>
+  lessons.value.filter((l) => l.module === moduleId || l.module?.id === moduleId)
 
 onMounted(async () => {
   try {
@@ -288,7 +257,7 @@ onMounted(async () => {
     }
 
     if (courseId) {
-      const rawCourse = await loadCourseData(courseId, lessonId, moduleId)
+      const rawCourse = await loadCourseData(courseId)
       course.value = mapCourseFromApi(rawCourse) || rawCourse
       const fallbackChapters = Array.isArray(rawCourse?.chapters) ? rawCourse.chapters : null
 
@@ -299,7 +268,7 @@ onMounted(async () => {
         lessons.value = parsed.lessons
       } catch (eLessons) {
         if (eLessons?.response?.status === 401) {
-          error.value = 'Anda belum login atau sesi telah berakhir. Silakan login kembali.'
+          error.value = 'Sesi Anda sudah berakhir. Silakan login kembali.'
           return
         }
         if (eLessons?.response?.status === 403) {
@@ -313,129 +282,73 @@ onMounted(async () => {
         lessons.value = parsed.lessons
       }
 
-      // Preselect module jika ada di URL
       if (moduleId) {
-        const foundModule = modules.value.find(m => m.id === parseInt(moduleId))
-        if (foundModule) {
-          selectedModule.value = foundModule
-          modulesById.value[foundModule.id] = foundModule
-          // Auto-open module dari URL
-          openModules.value.add(foundModule.id)
+        const found = modules.value.find((m) => m.id === parseInt(moduleId))
+        if (found) {
+          selectedModule.value = found
+          modulesById.value[found.id] = found
+          openModules.value.add(found.id)
         }
       }
-      // Jika tidak ada moduleId, pilih Bab pertama agar episode tidak campur
-      if (!selectedModule.value && modules.value.length > 0) {
+      if (!selectedModule.value && modules.value.length) {
         selectedModule.value = modules.value[0]
         modulesById.value[selectedModule.value.id] = selectedModule.value
-        // Auto-open first module jika tidak ada moduleId di URL
         openModules.value.add(modules.value[0].id)
       }
 
-      // Set current lesson
-      if (lessonId) {
-        const foundLesson = lessons.value.find(lesson => lesson.id === parseInt(lessonId))
-        currentLesson.value = foundLesson || lessons.value[0] || null
-      } else {
-        currentLesson.value = lessons.value[0] || null
-      }
-      await fetchQuestions(currentLesson.value?.id)
+      currentLesson.value = lessonId
+        ? (lessons.value.find((l) => l.id === parseInt(lessonId)) || lessons.value[0] || null)
+        : (lessons.value[0] || null)
 
-      // Load recommended courses (dengan fallback ke data dummy)
+      await fetchQuestions(currentLesson.value?.id)
       recommendedCourses.value = await loadRecommendedCourses(courseId)
     } else {
-      // Jika tidak ada courseId, gunakan data dummy
-      console.warn('No courseId provided, using dummy data')
-      const dummyCourseData = dummyCourses[0]
-      course.value = dummyCourseData
-      modules.value = dummyCourseData.modules
-      
-      const flattened = []
-      for (const m of modules.value) {
-        const ml = Array.isArray(m.lessons) ? m.lessons : []
-        flattened.push(...ml.map(l => ({ ...l, module: m.id })))
-      }
-      flattened.sort((a, b) => (a.order_index || 0) - (b.order_index || 0))
-      lessons.value = flattened
-      
+      const dummy = dummyCourses[0]
+      course.value = dummy
+      modules.value = dummy.modules
+      lessons.value = modules.value
+        .flatMap((m) => (Array.isArray(m.lessons) ? m.lessons : []).map((l) => ({ ...l, module: m.id })))
+        .sort((a, b) => (a.order_index || 0) - (b.order_index || 0))
       selectedModule.value = modules.value[0] || null
-      if (selectedModule.value) {
-        modulesById.value[selectedModule.value.id] = selectedModule.value
-        // Auto-open first module untuk dummy data
-        openModules.value.add(selectedModule.value.id)
-      }
+      if (selectedModule.value) openModules.value.add(selectedModule.value.id)
       currentLesson.value = lessons.value[0] || null
       await fetchQuestions(currentLesson.value?.id)
       recommendedCourses.value = dummyRecommendedCourses
     }
   } catch (e) {
-    console.error('Error in onMounted:', e)
-    // Fallback terakhir ke data dummy jika semua gagal
-    const dummyCourseData = dummyCourses[0]
-    course.value = dummyCourseData
-    modules.value = dummyCourseData.modules
-    
-    const flattened = []
-    for (const m of modules.value) {
-      const ml = Array.isArray(m.lessons) ? m.lessons : []
-      flattened.push(...ml.map(l => ({ ...l, module: m.id })))
-    }
-    flattened.sort((a, b) => (a.order_index || 0) - (b.order_index || 0))
-    lessons.value = flattened
-    
-    selectedModule.value = modules.value[0] || null
-    if (selectedModule.value) {
-      modulesById.value[selectedModule.value.id] = selectedModule.value
-      // Auto-open first module untuk fallback data
-      openModules.value.add(selectedModule.value.id)
-    }
-    currentLesson.value = lessons.value[0] || null
-    await fetchQuestions(currentLesson.value?.id)
-    recommendedCourses.value = dummyRecommendedCourses
-    
-    error.value = null // Reset error karena kita sudah ada fallback data
+    console.error('Error saat memuat halaman belajar:', e)
+    error.value = 'Gagal memuat materi. Coba muat ulang halaman.'
   } finally {
     loading.value = false
   }
 })
 
 const toggleModule = (moduleId) => {
-  if (openModules.value.has(moduleId)) {
-    openModules.value.delete(moduleId)
-  } else {
-    openModules.value.add(moduleId)
-  }
+  if (openModules.value.has(moduleId)) openModules.value.delete(moduleId)
+  else openModules.value.add(moduleId)
 }
 
 const selectLesson = (lesson) => {
   currentLesson.value = lesson
+  playerActive.value = false // kembali ke thumbnail saat ganti lesson
   completeError.value = null
   questionsError.value = null
   showAskSuccess.value = false
   showAskError.value = false
   askSuccessMessage.value = ''
-  askErrorMessage.value = ''
+  askError.value = null
   questionText.value = ''
   fetchQuestions(lesson?.id)
-  
-  // Find the module containing this lesson
-  const lessonModule = modules.value.find(m => {
-    return lessons.value.some(l => 
-      l.id === lesson.id && ((l.module === m.id) || (l.module?.id === m.id))
-    )
-  })
-  
-  // Auto-open the module containing this lesson
-  if (lessonModule && !openModules.value.has(lessonModule.id)) {
-    openModules.value.add(lessonModule.id)
-  }
-  
-  // Update selectedModule to match the lesson's module
+
+  const lessonModule = modules.value.find((m) =>
+    lessons.value.some((l) => l.id === lesson.id && (l.module === m.id || l.module?.id === m.id))
+  )
   if (lessonModule) {
+    openModules.value.add(lessonModule.id)
     selectedModule.value = lessonModule
     modulesById.value[lessonModule.id] = lessonModule
   }
-  
-  // Update URL with both moduleId and lessonId
+
   router.replace({
     query: {
       ...route.query,
@@ -452,8 +365,8 @@ const completeLesson = async (lesson) => {
     router.push({ name: 'login', query: { redirect: route.fullPath } })
     return
   }
-
   if (lesson.completed) return
+
   completingLessonId.value = lesson.id
   try {
     const lid = Number(lesson.id)
@@ -465,31 +378,22 @@ const completeLesson = async (lesson) => {
         try {
           await api.post('/courses/lesson/complete/', { id: lid })
         } catch (e2) {
-          if (e2?.response?.status && e2.response.status >= 400 && e2.response.status < 500) {
+          if (e2?.response?.status >= 400 && e2?.response?.status < 500) {
             await api.post('/courses/lesson/complete/')
-          } else {
-            throw e2
-          }
+          } else throw e2
         }
-      } else {
-        throw e1
-      }
+      } else throw e1
     }
 
-    lessons.value = lessons.value.map((l) => (l.id === lesson.id ? { ...l, completed: true, is_completed: true } : l))
+    lessons.value = lessons.value.map((l) =>
+      l.id === lesson.id ? { ...l, completed: true, is_completed: true } : l
+    )
     if (currentLesson.value?.id === lesson.id) {
       currentLesson.value = { ...currentLesson.value, completed: true, is_completed: true }
     }
   } catch (e) {
-    const resData = e.response?.data
-    if (resData && typeof resData === 'object') {
-      const messages = Object.entries(resData)
-        .map(([k, v]) => Array.isArray(v) ? `${k}: ${v.join(', ')}` : `${k}: ${v}`)
-        .join(' | ')
-      completeError.value = messages
-    } else {
-      completeError.value = e.response?.data?.message || e.response?.data?.error || e.message || 'Gagal menandai lesson selesai'
-    }
+    completeError.value =
+      e.response?.data?.detail || e.response?.data?.message || 'Gagal menandai lesson selesai.'
   } finally {
     completingLessonId.value = null
   }
@@ -520,6 +424,8 @@ const formatUserName = (u) => {
   return 'User'
 }
 
+const initialOf = (name) => String(name || '?').trim().charAt(0).toUpperCase()
+
 const fetchQuestions = async (lessonId) => {
   if (!lessonId) {
     questions.value = []
@@ -532,13 +438,11 @@ const fetchQuestions = async (lessonId) => {
     const { data } = await api.get(`/courses/lessons/${lessonId}/questions/`)
     questions.value = Array.isArray(data) ? data : (data?.results || [])
   } catch (e) {
-    if (e?.response?.status === 403) {
-      questionsError.value = 'Anda belum membeli kursus ini.'
-    } else if (e?.response?.status === 401) {
-      questionsError.value = 'Sesi berakhir. Silakan login kembali.'
-    } else {
-      questionsError.value = e.response?.data?.message || e.message || 'Gagal memuat pertanyaan'
-    }
+    const status = e?.response?.status
+    questionsError.value =
+      status === 403 ? 'Anda belum membeli kursus ini.'
+        : status === 401 ? 'Sesi berakhir. Silakan login kembali.'
+        : 'Gagal memuat pertanyaan.'
     questions.value = []
   } finally {
     questionsLoading.value = false
@@ -552,8 +456,7 @@ const submitQuestion = async () => {
 
   showAskSuccess.value = false
   showAskError.value = false
-  askSuccessMessage.value = ''
-  askErrorMessage.value = ''
+  askError.value = null
 
   if (!isAuthenticated.value) {
     router.push({ name: 'login', query: { redirect: route.fullPath } })
@@ -566,65 +469,42 @@ const submitQuestion = async () => {
     questionText.value = ''
     askSuccessMessage.value = 'Pertanyaan berhasil dikirim.'
     showAskSuccess.value = true
-    if (data) {
-      questions.value = [data, ...questions.value]
-    } else {
-      await fetchQuestions(lessonId)
-    }
+    if (data) questions.value = [data, ...questions.value]
+    else await fetchQuestions(lessonId)
   } catch (e) {
-    const resData = e.response?.data
-    if (resData && typeof resData === 'object') {
-      const messages = Object.entries(resData)
-        .map(([k, v]) => Array.isArray(v) ? `${k}: ${v.join(', ')}` : `${k}: ${v}`)
-        .join(' | ')
-      askErrorMessage.value = messages
-    } else {
-      askErrorMessage.value = e.response?.data?.message || e.response?.data?.error || e.message || 'Gagal mengirim pertanyaan'
-    }
+    askError.value = e
     showAskError.value = true
   } finally {
     asking.value = false
   }
 }
 
-const selectModule = async (module) => {
-  selectedModule.value = module
-  // Detail modul sudah tersedia dari course.modules
-  modulesById.value[module.id] = module
-  // If there are lessons for this module, select the first one
-  const firstLesson = lessons.value.find(l => (l.module === module.id) || (l.module?.id === module.id))
-  if (firstLesson) {
-    selectLesson(firstLesson)
-  }
-  // Update URL with selected moduleId
-  router.replace({
-    query: {
-      ...route.query,
-      moduleId: module.id,
-    },
-  })
-}
-
-const visibleLessons = computed(() => {
-  if (!selectedModule.value) return lessons.value
-  return lessons.value.filter(l => (l.module === selectedModule.value.id) || (l.module?.id === selectedModule.value.id))
-})
-
-// Sumber pemutaran video
+// ===== Player =====
 const playUrl = computed(() => currentLesson.value?.video_url || course.value?.video_url || null)
 const youTubeId = computed(() => getYouTubeId(playUrl.value))
 const isYouTube = computed(() => !!youTubeId.value)
-const youtubeEmbedSrc = computed(() => youTubeId.value ? `https://www.youtube.com/embed/${youTubeId.value}?rel=0&modestbranding=1` : null)
-// Jika bukan YouTube dan playUrl tersedia, gunakan tag video
 const isVideoFile = computed(() => !!playUrl.value && !isYouTube.value)
 
-const goToCourse = (courseSlug) => {
-  router.push({ name: 'course-details', params: { id: courseSlug } })
+// youtube-nocookie + rel=0 (tanpa video channel lain di akhir) + modestbranding.
+// Overlay di template menutup area judul & logo supaya klik tidak lolos ke YouTube.
+const youtubeEmbedSrc = computed(() =>
+  youTubeId.value
+    ? `https://www.youtube-nocookie.com/embed/${youTubeId.value}?rel=0&modestbranding=1&playsinline=1&autoplay=1&iv_load_policy=3`
+    : null
+)
+
+const activatePlayer = () => {
+  if (playUrl.value) playerActive.value = true
 }
+
+// Navigasi rekomendasi: pakai path literal agar tidak bergantung pada nama route
+const courseLink = (c) => `/course/${c.id || c.slug}`
+const recThumb = (c) =>
+  c.thumbnail_url || c.image || c.thumbnail || c.featured_image || recommendedCourse1Src
 </script>
 
 <template>
-  <div class="w-full max-w-none mx-auto bg-white overflow-hidden">
+  <div class="w-full max-w-none mx-auto bg-white overflow-x-hidden">
     <AppHeader :is-authenticated="isAuthenticated" :user="auth.user" @logout="logout" />
     <SuccessModal
       :show="showAskSuccess"
@@ -634,171 +514,313 @@ const goToCourse = (courseSlug) => {
     />
     <ErrorModal
       :show="showAskError"
-      title="Gagal"
-      :message="askErrorMessage"
+      title="Gagal Mengirim Pertanyaan"
+      :error="askError"
       @close="showAskError = false"
     />
 
     <section id="main-content" class="pb-16">
-      <div v-if="loading" class="text-center py-10 font-['Montserrat']">Memuat course...</div>
-      <div v-else-if="error" class="text-center py-10 font-['Montserrat']">{{ error }}</div>
-      <div v-else-if="course" class="grid grid-cols-1 lg:grid-cols-[1021fr_350fr] w-full">
-        <main>
-          <div class="bg-[#212121] relative">
-            <div class="relative w-full h-auto max-w-full aspect-video rounded-lg overflow-hidden">
+      <!-- ===== Skeleton shimmer ===== -->
+      <div v-if="loading" class="grid grid-cols-1 lg:grid-cols-[1fr_360px] w-full" aria-hidden="true">
+        <div>
+          <div class="w-full aspect-video shimmer-dark"></div>
+          <div class="px-4 lg:px-16 py-6">
+            <div class="h-8 lg:h-10 w-2/3 rounded-lg shimmer"></div>
+            <div class="h-5 w-1/2 rounded shimmer mt-3"></div>
+            <div class="h-10 w-40 rounded-lg shimmer mt-5"></div>
+          </div>
+          <div class="px-4 lg:px-16 pb-6 flex flex-wrap gap-4">
+            <div class="h-20 w-64 rounded-2xl shimmer"></div>
+            <div class="h-20 w-28 rounded-2xl shimmer"></div>
+            <div class="h-20 w-28 rounded-2xl shimmer"></div>
+            <div class="h-20 w-32 rounded-2xl shimmer"></div>
+          </div>
+          <div class="px-4 lg:px-16 space-y-3">
+            <div class="h-4 w-full rounded shimmer"></div>
+            <div class="h-4 w-11/12 rounded shimmer"></div>
+            <div class="h-4 w-10/12 rounded shimmer"></div>
+            <div class="h-4 w-9/12 rounded shimmer"></div>
+          </div>
+          <div class="px-4 lg:px-16 mt-10">
+            <div class="h-40 w-full rounded-2xl shimmer"></div>
+          </div>
+        </div>
+        <aside class="hidden lg:block border-l border-gray-200 p-5">
+          <div class="h-4 w-1/2 rounded shimmer"></div>
+          <div class="h-2 w-full rounded-full shimmer mt-3"></div>
+          <div class="mt-6 space-y-3">
+            <div v-for="n in 3" :key="`sk-mod-${n}`">
+              <div class="h-5 w-3/4 rounded shimmer"></div>
+              <div class="h-12 w-full rounded-lg shimmer mt-2"></div>
+              <div class="h-12 w-full rounded-lg shimmer mt-2"></div>
+            </div>
+          </div>
+          <div class="h-48 w-full rounded-2xl shimmer mt-8"></div>
+        </aside>
+      </div>
+
+      <!-- ===== Error ===== -->
+      <div v-else-if="error" class="max-w-lg mx-auto my-20 px-6 text-center">
+        <div class="mx-auto mb-4 flex items-center justify-center w-14 h-14 rounded-full bg-red-50 text-red-500">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="w-7 h-7">
+            <circle cx="12" cy="12" r="10" /><path d="M12 8v4" /><path d="M12 16h.01" />
+          </svg>
+        </div>
+        <h2 class="font-montserrat text-lg font-bold mb-2">Tidak bisa membuka materi</h2>
+        <p class="font-montserrat text-sm text-gray-600 mb-6">{{ error }}</p>
+        <RouterLink to="/course" class="inline-block bg-[#009444] text-white rounded-lg px-5 py-2.5 font-montserrat font-semibold no-underline">
+          Kembali ke Daftar Kursus
+        </RouterLink>
+      </div>
+
+      <!-- ===== Konten ===== -->
+      <div v-else-if="course" class="grid grid-cols-1 lg:grid-cols-[1fr_360px] w-full">
+        <main class="min-w-0">
+          <!-- Player -->
+          <div class="relative bg-black w-full aspect-video overflow-hidden">
+            <!-- Facade: thumbnail + tombol play. Iframe baru dimuat setelah diklik. -->
+            <button
+              v-if="!playerActive"
+              type="button"
+              class="absolute inset-0 w-full h-full group cursor-pointer border-0 p-0 bg-black"
+              aria-label="Putar video"
+              @click="activatePlayer"
+            >
+              <img
+                :src="thumbnailSrc"
+                alt=""
+                class="w-full h-full object-cover opacity-85 transition-opacity duration-300 group-hover:opacity-70"
+                @error="onThumbError"
+              />
+              <span class="absolute inset-0 flex items-center justify-center">
+                <span class="flex items-center justify-center w-20 h-20 rounded-full bg-[#009444] shadow-2xl transition-transform duration-300 group-hover:scale-110">
+                  <svg viewBox="0 0 24 24" fill="white" class="w-9 h-9 ml-1"><path d="M8 5v14l11-7z" /></svg>
+                </span>
+              </span>
+              <span class="absolute bottom-4 left-4 right-4 text-left">
+                <span class="block font-montserrat text-white text-base md:text-xl font-bold drop-shadow-lg line-clamp-2">
+                  {{ currentLesson?.title || course.title }}
+                </span>
+                <span v-if="currentLesson?.duration" class="block font-montserrat text-white/80 text-xs md:text-sm mt-1 drop-shadow">
+                  {{ formatLessonDuration(currentLesson.duration) }}
+                </span>
+              </span>
+            </button>
+
+            <template v-else>
               <iframe
                 v-if="isYouTube"
-                class="w-full h-full"
+                class="absolute inset-0 w-full h-full"
                 :src="youtubeEmbedSrc"
-                title="YouTube video player"
+                title="Pemutar video materi"
                 frameborder="0"
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                referrerpolicy="strict-origin-when-cross-origin"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                 allowfullscreen
               ></iframe>
-              <video v-else-if="isVideoFile" class="w-full h-full" :src="playUrl" controls></video>
-              <img v-else :src="thumbnailSrc" alt="Course video thumbnail" class="w-full h-full object-cover" />
+              <video v-else-if="isVideoFile" class="absolute inset-0 w-full h-full" :src="playUrl" controls controlsList="nodownload" disablePictureInPicture></video>
+
+              <!-- Penahan klik: menutup area judul (atas) dan logo YouTube (kanan bawah)
+                   supaya user tetap menonton di dalam situs Byzan. -->
+              <template v-if="isYouTube">
+                <div class="yt-guard yt-guard--top" aria-hidden="true"></div>
+                <div class="yt-guard yt-guard--logo" aria-hidden="true"></div>
+              </template>
+            </template>
+          </div>
+
+          <!-- Judul & aksi -->
+          <div class="px-4 lg:px-16 pt-6">
+            <p class="font-montserrat text-xs font-bold uppercase tracking-wider text-[#009444] mb-1">
+              {{ selectedModule?.title || 'Materi' }}
+            </p>
+            <h1 class="font-montserrat text-2xl lg:text-4xl font-bold text-gray-900 m-0 leading-tight">
+              {{ course.title }}
+            </h1>
+
+            <div v-if="currentLesson" class="mt-3 flex flex-wrap items-center gap-3">
+              <span class="font-montserrat text-base lg:text-lg font-medium text-gray-700">
+                Lesson {{ String(currentLesson.order_index || 1).padStart(2, '0') }} — {{ currentLesson.title }}
+              </span>
+              <span
+                v-if="currentLesson.completed"
+                class="inline-flex items-center gap-1.5 bg-green-50 text-[#009444] rounded-full px-3 py-1 font-montserrat text-xs font-bold"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5">
+                  <path d="m5 12 5 5L20 7" />
+                </svg>
+                Selesai
+              </span>
+            </div>
+
+            <div v-if="currentLesson" class="mt-4 flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                class="inline-flex items-center gap-2 bg-[#009444] text-white border-0 rounded-lg px-5 py-2.5 cursor-pointer font-montserrat font-semibold transition-opacity hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+                :disabled="completingLessonId === currentLesson.id || currentLesson.completed"
+                @click="completeLesson(currentLesson)"
+              >
+                <svg v-if="!currentLesson.completed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4">
+                  <path d="m5 12 5 5L20 7" />
+                </svg>
+                {{ currentLesson.completed ? 'Sudah Selesai' : (completingLessonId === currentLesson.id ? 'Memproses...' : 'Tandai Selesai') }}
+              </button>
+              <p v-if="completeError" class="m-0 font-montserrat text-sm text-red-600 font-semibold">{{ completeError }}</p>
             </div>
           </div>
 
-          <div class="bg-white px-4 lg:px-18 py-3.5 -mt-px">
-            <h1 class="text-2xl lg:text-[34px] font-bold text-[#009444] mb-2 font-['Montserrat']">{{ course.title }}</h1>
-            <div v-if="currentLesson" class="flex flex-col gap-3">
-              <p class="text-base lg:text-xl font-medium m-0 font-['Montserrat']">
-                Lesson {{ String(currentLesson.order_index || currentLesson.orderIndex || 1).padStart(2, '0') }} | {{ currentLesson.title }}
-              </p>
-              <div class="flex items-center gap-3">
-                <button
-                  type="button"
-                  class="bg-[#009444] text-white border-0 rounded-lg px-4 py-2 cursor-pointer font-['Montserrat'] font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
-                  :disabled="completingLessonId === currentLesson.id || currentLesson.completed"
-                  @click="completeLesson(currentLesson)"
+          <!-- Instruktur + statistik: satu baris -->
+          <div class="px-4 lg:px-16 pt-6">
+            <div class="flex flex-wrap items-stretch gap-3">
+              <!-- Instruktur (dari field `instructor_name` backend) -->
+              <div class="flex items-center gap-3 bg-gradient-to-r from-[#009444] to-[#0a7a3c] text-white rounded-2xl px-4 py-3 min-w-[240px] flex-1 sm:flex-none">
+                <img
+                  v-if="course.instructor_avatar"
+                  :src="course.instructor_avatar"
+                  :alt="course.instructor_name || 'Instruktur'"
+                  class="w-12 h-12 rounded-full object-cover shrink-0 ring-2 ring-white/40"
+                />
+                <span
+                  v-else
+                  class="flex items-center justify-center w-12 h-12 rounded-full bg-white/20 ring-2 ring-white/40 shrink-0 font-montserrat font-bold text-lg"
                 >
-                  {{ currentLesson.completed ? 'Sudah Selesai' : (completingLessonId === currentLesson.id ? 'Memproses...' : 'Tandai Selesai') }}
-                </button>
-                <p v-if="completeError" class="m-0 text-sm font-['Montserrat'] text-red-600 font-semibold">{{ completeError }}</p>
+                  {{ initialOf(course.instructor_name) }}
+                </span>
+                <span class="min-w-0">
+                  <span class="block font-montserrat text-[10px] font-bold uppercase tracking-wider text-white/70">Instruktur</span>
+                  <span class="block font-montserrat text-base font-bold truncate">
+                    {{ course.instructor_name || 'Belum ditentukan' }}
+                  </span>
+                </span>
+              </div>
+
+              <!-- Rating -->
+              <div class="stat-card">
+                <span class="stat-value">
+                  {{ courseStats.rating != null ? Number(courseStats.rating).toFixed(1) : '—' }}
+                  <svg v-if="courseStats.rating != null" viewBox="0 0 24 24" fill="currentColor" class="w-4 h-4 text-amber-400">
+                    <path d="M12 2l2.9 6.1 6.6.9-4.8 4.6 1.2 6.6L12 17.1 6.1 20.2l1.2-6.6L2.5 9l6.6-.9z" />
+                  </svg>
+                </span>
+                <span class="stat-label">{{ courseStats.ratingCount }} peringkat</span>
+              </div>
+
+              <!-- Peserta -->
+              <div class="stat-card">
+                <span class="stat-value">{{ courseStats.buyers }}</span>
+                <span class="stat-label">Peserta</span>
+              </div>
+
+              <!-- Durasi -->
+              <div class="stat-card">
+                <span class="stat-value">{{ formatCourseDuration(courseStats.durationMinutes) }}</span>
+                <span class="stat-label">Total durasi</span>
+              </div>
+
+              <!-- Progress -->
+              <div class="stat-card">
+                <span class="stat-value">{{ progressPercent }}%</span>
+                <span class="stat-label">{{ completedCount }}/{{ lessons.length }} lesson</span>
               </div>
             </div>
           </div>
 
-          <div class="flex flex-col lg:flex-row items-start lg:items-center px-4 lg:px-18 py-7 lg:py-[27px] flex-wrap gap-5">
-            <div class="flex items-center gap-2 bg-[#009444] text-white px-px py-px rounded-lg">
-              <img
-                :src="instructorAvatarSrc"
-                :alt="'Instruktur'"
-                class="w-12 h-12 rounded-full object-cover"
-              />
-              <div class="flex flex-col pr-18">
-                <p class="text-xl font-semibold m-0 font-['Montserrat']">
-                    Instruktur
-                </p>
-                <p class="text-[11px] font-medium m-0 font-['Montserrat']">
-                   {{ course.instructor_username || 'Instruktur' }}
-                </p>
-              </div>
-            </div>
-
-            <div class="flex items-start gap-10 flex-wrap">
-              <!-- <div class="text-center font-['Montserrat']">
-                <span class="text-xl font-semibold block">{{ course.is_free ? 'Gratis' : 'Berbayar' }}</span>
-                <span class="text-[11px] font-medium block mt-2">Tipe</span>
-              </div> -->
-              <!-- <div class="text-center font-['Montserrat']">
-                <span class="text-xl font-semibold block">{{ course.level || '-' }}</span>
-                <span class="text-[11px] font-medium block mt-2">Level</span>
-              </div> -->
-              <div class="text-center font-montserrat">
-                <div class="flex items-center">
-                  <span class="text-xl font-semibold block mr-2">{{ courseStats.rating ?? 'N/A' }}</span>
-                  <img :src="starIconSrc" alt="Star" class="w-5 h-5 object-contain" />
-                </div>
-                <span class="text-[11px] font-medium block mt-2">{{ courseStats.ratingCount }} Peringkat</span>
-              </div>
-              <div class="text-center font-['Montserrat']">
-                <span class="text-xl font-semibold block">{{ courseStats.buyers }}</span>
-                <span class="text-[11px] font-medium block mt-2">Peserta</span>
-              </div>
-              <div class="text-center font-['Montserrat']">
-                <span class="text-xl font-semibold block">{{ formatCourseDuration(courseStats.durationMinutes) }}</span>
-                <span class="text-[11px] font-medium block mt-2">Durasi</span>
-              </div>
-              <!-- <div class="text-center font-['Montserrat']" v-if="course.price">
-                <span class="text-xl font-semibold block">Rp {{ String(course.price).replace(/\B(?=(\d{3})+(?!\d))/g, '.') }}</span>
-                <span class="text-[11px] font-medium block mt-2">Harga</span>
-              </div> -->
-            </div>
-          </div>
-
-          <article class="px-4 lg:px-18 pt-11 font-['Comfortaa'] text-[15px] font-medium leading-[30px]">
+          <!-- Materi -->
+          <article class="px-4 lg:px-16 pt-10 font-comfortaa text-[15px] font-medium leading-[30px] text-gray-800">
             <template v-if="currentLesson?.content">
-              <div v-html="currentLesson.content" class="[&>p]:mb-4 [&>p:last-child]:mb-0 course-content"></div>
+              <div v-html="currentLesson.content" class="course-content"></div>
             </template>
             <template v-else-if="course.content">
-              <div v-html="course.content" class="[&>p]:mb-4 [&>p:last-child]:mb-0 course-content"></div>
+              <div v-html="course.content" class="course-content"></div>
             </template>
             <template v-else-if="course.description">
               <p v-for="(paragraph, index) in course.description.split('\n\n')" :key="index" class="mb-4 last:mb-0">
                 {{ paragraph }}
               </p>
             </template>
-            <p v-else>-</p>
+            <p v-else class="text-gray-400">Belum ada catatan materi untuk lesson ini.</p>
           </article>
 
-          <section class="px-4 lg:px-18 pt-10">
-            <div class="rounded-2xl border border-gray-200 p-5">
-              <div class="flex items-center justify-between gap-3 mb-4">
-                <h2 class="m-0 text-xl font-bold text-[#009444] font-['Montserrat']">Q&A Lesson</h2>
-                <p v-if="currentLesson" class="m-0 text-xs text-gray-600 font-semibold font-['Montserrat']">
-                  Lesson {{ String(currentLesson.order_index || currentLesson.orderIndex || 1).padStart(2, '0') }}
-                </p>
+          <!-- Q&A -->
+          <section class="px-4 lg:px-16 pt-10">
+            <div class="rounded-2xl border border-gray-200 p-5 md:p-6">
+              <div class="flex items-center justify-between gap-3 mb-5">
+                <h2 class="m-0 font-montserrat text-xl font-bold text-[#009444]">Tanya Jawab</h2>
+                <span v-if="currentLesson" class="font-montserrat text-xs text-gray-500 font-semibold">
+                  Lesson {{ String(currentLesson.order_index || 1).padStart(2, '0') }}
+                </span>
               </div>
 
-              <div v-if="!isAuthenticated" class="flex items-center justify-between gap-3">
-                <p class="m-0 text-sm text-gray-600 font-semibold font-['Montserrat']">Login dulu untuk bertanya.</p>
+              <div v-if="!isAuthenticated" class="flex flex-wrap items-center justify-between gap-3">
+                <p class="m-0 font-montserrat text-sm text-gray-600 font-semibold">Login dulu untuk bertanya.</p>
                 <button
                   type="button"
-                  class="bg-[#009444] text-white border-0 rounded-lg px-4 py-2 cursor-pointer font-['Montserrat'] font-semibold"
+                  class="bg-[#009444] text-white border-0 rounded-lg px-4 py-2 cursor-pointer font-montserrat font-semibold"
                   @click="router.push({ name: 'login', query: { redirect: route.fullPath } })"
                 >
                   Login
                 </button>
               </div>
 
-              <div v-else class="flex flex-col gap-4">
+              <div v-else class="flex flex-col gap-5">
                 <form class="flex flex-col gap-3" @submit.prevent="submitQuestion">
                   <textarea
                     v-model="questionText"
-                    class="w-full min-h-[96px] rounded-lg border border-gray-300 bg-white p-3 font-['Montserrat'] text-sm outline-none focus:ring-2 focus:ring-[#009444]"
+                    class="w-full min-h-[92px] rounded-xl border border-gray-300 bg-gray-50 p-3.5 font-montserrat text-sm outline-none transition focus:bg-white focus:border-[#009444] focus:ring-2 focus:ring-[#009444]/20"
                     placeholder="Tulis pertanyaan tentang lesson ini..."
                     required
                   ></textarea>
                   <div class="flex items-center justify-end">
                     <button
                       type="submit"
-                      class="bg-[#009444] text-white border-0 rounded-lg px-4 py-2 cursor-pointer font-['Montserrat'] font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
-                      :disabled="asking || !currentLesson"
+                      class="bg-[#009444] text-white border-0 rounded-lg px-5 py-2.5 cursor-pointer font-montserrat font-semibold transition-opacity hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+                      :disabled="asking || !currentLesson || !questionText.trim()"
                     >
                       {{ asking ? 'Mengirim...' : 'Kirim Pertanyaan' }}
                     </button>
                   </div>
                 </form>
 
-                <p v-if="questionsLoading" class="m-0 text-sm text-gray-600 font-semibold font-['Montserrat']">Memuat pertanyaan...</p>
-                <p v-else-if="questionsError" class="m-0 text-sm text-red-600 font-semibold font-['Montserrat']">{{ questionsError }}</p>
+                <!-- Skeleton shimmer untuk Q&A -->
+                <div v-if="questionsLoading" class="flex flex-col gap-3" aria-hidden="true">
+                  <div v-for="n in 2" :key="`q-sk-${n}`" class="rounded-xl bg-gray-50 p-4">
+                    <div class="flex items-center justify-between gap-3 mb-3">
+                      <div class="h-4 w-32 rounded shimmer"></div>
+                      <div class="h-3 w-24 rounded shimmer"></div>
+                    </div>
+                    <div class="h-4 w-full rounded shimmer"></div>
+                    <div class="h-4 w-2/3 rounded shimmer mt-2"></div>
+                  </div>
+                </div>
+
+                <p v-else-if="questionsError" class="m-0 font-montserrat text-sm text-red-600 font-semibold">
+                  {{ questionsError }}
+                </p>
 
                 <div v-else class="flex flex-col gap-3">
-                  <div v-if="questions.length === 0" class="text-sm text-gray-600 font-semibold font-['Montserrat']">Belum ada pertanyaan.</div>
+                  <p v-if="questions.length === 0" class="m-0 font-montserrat text-sm text-gray-500">
+                    Belum ada pertanyaan. Jadilah yang pertama bertanya.
+                  </p>
                   <div v-for="q in questions" :key="q.id" class="rounded-xl bg-gray-50 p-4">
-                    <div class="flex items-center justify-between gap-3 mb-2">
-                      <p class="m-0 text-sm font-bold text-black font-['Montserrat']">{{ formatUserName(q.user) }}</p>
-                      <p class="m-0 text-xs text-gray-600 font-semibold font-['Montserrat']">{{ formatDateTime(q.created_at) }}</p>
+                    <div class="flex items-center gap-3 mb-2">
+                      <span class="flex items-center justify-center w-8 h-8 rounded-full bg-[#009444]/10 text-[#009444] font-montserrat font-bold text-sm shrink-0">
+                        {{ initialOf(formatUserName(q.user)) }}
+                      </span>
+                      <span class="min-w-0 flex-1">
+                        <span class="block font-montserrat text-sm font-bold text-gray-900 truncate">{{ formatUserName(q.user) }}</span>
+                        <span class="block font-montserrat text-[11px] text-gray-500">{{ formatDateTime(q.created_at) }}</span>
+                      </span>
                     </div>
-                    <p class="m-0 text-sm text-gray-800 font-semibold font-['Montserrat']">{{ q.question }}</p>
-                    <div v-if="q.answer" class="mt-3 border-l-4 border-[#009444] pl-3">
+                    <p class="m-0 font-montserrat text-sm text-gray-800 leading-relaxed">{{ q.question }}</p>
+
+                    <div v-if="q.answer" class="mt-3 border-l-4 border-[#009444] bg-white rounded-r-lg pl-3 pr-3 py-2">
                       <div class="flex items-center justify-between gap-3 mb-1">
-                        <p class="m-0 text-xs text-gray-600 font-bold font-['Montserrat']">{{ formatUserName(q.answered_by || 'Admin') }}</p>
-                        <p class="m-0 text-xs text-gray-600 font-semibold font-['Montserrat']">{{ formatDateTime(q.answered_at) }}</p>
+                        <span class="font-montserrat text-xs text-[#009444] font-bold">
+                          {{ formatUserName(q.answered_by) || 'Admin' }}
+                        </span>
+                        <span class="font-montserrat text-[11px] text-gray-500">{{ formatDateTime(q.answered_at) }}</span>
                       </div>
-                      <p class="m-0 text-sm text-gray-800 font-['Montserrat']">{{ q.answer }}</p>
+                      <p class="m-0 font-montserrat text-sm text-gray-800 leading-relaxed">{{ q.answer }}</p>
                     </div>
                   </div>
                 </div>
@@ -807,64 +829,116 @@ const goToCourse = (courseSlug) => {
           </section>
         </main>
 
-        <aside class="bg-white border-l border-gray-200">
-          <div class="p-5 sticky top-5">
-            <ul class="flex flex-col gap-2">
-              <template v-for="m in modules" :key="m.id">
-                <!-- Bab Header with Toggle -->
-                <li class="px-2 pt-3 pb-2 border-gray-300 mb-2 transition-all duration-300 hover:-translate-y-1 cursor-pointer" @click="toggleModule(m.id)">
-                  <div class="flex justify-between items-center">
-                    <p class="m-0 text-base font-bold leading-[1.4] font-montserrat">
-                      <span class="font-bold mr-2">Bab {{ m.order_index || m.orderIndex || m.id }}: </span>
-                      <span class="font-semibold">{{ m.title }}</span>
-                    </p>
-                    <span class="transition-transform duration-300 ease-in-out text-[#009444] flex items-center" :class="{ 'rotate-180': openModules.has(m.id) }">
-                      <svg width="12" height="8" viewBox="0 0 12 8" fill="none">
-                        <path d="M1 1L6 6L11 1" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                      </svg>
-                    </span>
-                  </div>
-                </li>
-                <!-- Episodes untuk bab ini (collapsible with smooth transition) -->
-                <Transition name="accordion">
-                  <div v-if="openModules.has(m.id)" class="overflow-hidden">
-                    <li 
-                      v-for="(lesson, index) in lessons.filter(l => (l.module === m.id) || (l.module?.id === m.id))" 
-                      :key="`lesson-${lesson.id}`"
-                      @click="selectLesson(lesson)" 
-                      :class="{ 'bg-gray-100 translate-x-0.5 shadow-[0_1px_3px_rgba(0,148,68,0.2)]': lesson.id === currentLesson?.id }"
-                      class="flex items-start gap-3 px-3 py-2 ml-4 rounded-md transition-all duration-300 ease-in-out transform-gpu cursor-pointer hover:bg-gray-100 hover:translate-x-1 hover:shadow-[0_2px_4px_rgba(0,0,0,0.1)]"
-                    >
-                      <div class="shrink-0 w-4 h-4 bg-gray-300 rounded-sm mt-1 relative transition-all duration-200 ease-in-out transform-gpu" :class="{ 'bg-[#009444] scale-105 shadow-[0_2px_4px_rgba(0,148,68,0.3)]': lesson.completed || lesson.id === currentLesson?.id }">
-                        <img v-if="lesson.completed || lesson.id === currentLesson?.id" :src="checkedIconSrc" alt="Checked" class="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-4 h-4" />
-                      </div>
-                      <p class="m-0 text-sm font-medium leading-[1.4] font-['Montserrat']">
-                        <span class="text-lg font-bold">Eps. {{ index + 1 }}</span><br />
-                        <span class="font-semibold">{{ lesson.title }} ({{ formatLessonDuration(lesson.duration) }})</span>
-                      </p>
-                    </li>
-                  </div>
-                </Transition>
-              </template>
-            </ul>
+        <!-- ===== Sidebar ===== -->
+        <aside class="bg-white border-t lg:border-t-0 lg:border-l border-gray-200 min-w-0">
+          <div class="p-5 lg:sticky lg:top-5">
+            <!-- Progress -->
+            <div class="mb-6">
+              <div class="flex items-baseline justify-between mb-2">
+                <h2 class="m-0 font-montserrat text-sm font-bold text-gray-900">Progress Belajar</h2>
+                <span class="font-montserrat text-sm font-bold text-[#009444]">{{ progressPercent }}%</span>
+              </div>
+              <div class="h-2 w-full rounded-full bg-gray-200 overflow-hidden">
+                <div class="h-full rounded-full bg-[#009444] transition-all duration-500" :style="{ width: `${progressPercent}%` }"></div>
+              </div>
+              <p class="m-0 mt-2 font-montserrat text-xs text-gray-500">
+                {{ completedCount }} dari {{ lessons.length }} lesson selesai
+              </p>
+            </div>
 
-            <div class="mt-27 text-center">
-              <h2 class="text-xl font-medium mb-10! font-['Montserrat']">Rekomendasi Kursus</h2>
-              <div
-                v-for="recCourse in recommendedCourses"
-                :key="recCourse.id"
-                class="bg-gray-100 rounded-[27.5px] px-3.5 pt-3.5 pb-4 mb-9 last:mb-0 shadow-[6.3px_5.3px_13.6px_0px_rgba(0,0,0,0.05)] shadow-[inset_9.5px_9px_7.3px_0px_rgba(255,255,255,0.1)] backdrop-blur-[10px] transition-all duration-200 cursor-pointer hover:-translate-y-0.5 hover:shadow-[8px_7px_16px_0px_rgba(0,0,0,0.1)]"
-                @click="goToCourse(recCourse.id || recCourse.slug)"
-              >
-                <div class="rounded-[14px] overflow-hidden mb-3 shadow-[inset_2.6px_2.1px_2.1px_0px_rgba(255,255,255,0.25)]">
-                  <img
-                    :src="recCourse.image || recCourse.thumbnail || recCourse.featured_image || recommendedCourse1Src"
-                    :alt="recCourse.title"
-                    class="w-full h-auto block"
-                  />
-                </div>
-                <h3 class="text-[33.6px] font-bold text-[#009444] mb-1.5 font-['Montserrat']">{{ recCourse.title }}</h3>
-                <a href="#" class="text-[13.4px] font-semibold text-black no-underline transition-opacity duration-200 font-['Montserrat'] hover:opacity-70" @click.prevent="goToCourse(recCourse.id || recCourse.slug)">Click Here For Free Course</a>
+            <!-- Daftar bab -->
+            <div class="flex flex-col gap-1.5">
+              <div v-for="m in modules" :key="m.id" class="rounded-xl overflow-hidden border border-gray-200">
+                <button
+                  type="button"
+                  class="w-full flex items-center justify-between gap-2 px-3.5 py-3 bg-gray-50 hover:bg-gray-100 transition-colors cursor-pointer border-0 text-left"
+                  :aria-expanded="openModules.has(m.id)"
+                  @click="toggleModule(m.id)"
+                >
+                  <span class="min-w-0">
+                    <span class="block font-montserrat text-[10px] font-bold uppercase tracking-wider text-[#009444]">
+                      Bab {{ m.order_index || m.id }}
+                    </span>
+                    <span class="block font-montserrat text-sm font-bold text-gray-900 leading-snug">{{ m.title }}</span>
+                    <span class="block font-montserrat text-[11px] text-gray-500 mt-0.5">
+                      {{ lessonsOf(m.id).length }} lesson
+                    </span>
+                  </span>
+                  <svg
+                    viewBox="0 0 12 8"
+                    fill="none"
+                    class="w-3 h-2 shrink-0 text-[#009444] transition-transform duration-300"
+                    :class="{ 'rotate-180': openModules.has(m.id) }"
+                  >
+                    <path d="M1 1L6 6L11 1" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
+                </button>
+
+                <Transition name="accordion">
+                  <ul v-if="openModules.has(m.id)" class="list-none m-0 p-1.5 flex flex-col gap-1 bg-white">
+                    <li
+                      v-for="(lesson, index) in lessonsOf(m.id)"
+                      :key="`lesson-${lesson.id}`"
+                      class="flex items-start gap-2.5 px-2.5 py-2 rounded-lg cursor-pointer transition-colors"
+                      :class="lesson.id === currentLesson?.id ? 'bg-[#009444]/10' : 'hover:bg-gray-50'"
+                      @click="selectLesson(lesson)"
+                    >
+                      <span
+                        class="shrink-0 mt-0.5 w-4 h-4 rounded flex items-center justify-center transition-colors"
+                        :class="lesson.completed ? 'bg-[#009444]' : (lesson.id === currentLesson?.id ? 'bg-[#009444]/30' : 'bg-gray-200')"
+                      >
+                        <svg v-if="lesson.completed" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" class="w-2.5 h-2.5">
+                          <path d="m5 12 5 5L20 7" />
+                        </svg>
+                      </span>
+                      <span class="min-w-0 flex-1">
+                        <span class="block font-montserrat text-[11px] font-bold text-gray-500">Eps. {{ index + 1 }}</span>
+                        <span
+                          class="block font-montserrat text-[13px] font-semibold leading-snug"
+                          :class="lesson.id === currentLesson?.id ? 'text-[#009444]' : 'text-gray-800'"
+                        >
+                          {{ lesson.title }}
+                        </span>
+                        <span class="block font-montserrat text-[11px] text-gray-400 mt-0.5">
+                          {{ formatLessonDuration(lesson.duration) }}
+                        </span>
+                      </span>
+                    </li>
+                  </ul>
+                </Transition>
+              </div>
+            </div>
+
+            <!-- Rekomendasi -->
+            <div v-if="recommendedCourses.length" class="mt-8">
+              <h2 class="m-0 mb-3 font-montserrat text-sm font-bold text-gray-900">Rekomendasi Kursus</h2>
+              <div class="flex flex-col gap-3">
+                <RouterLink
+                  v-for="rec in recommendedCourses"
+                  :key="`rec-${rec.id}`"
+                  :to="courseLink(rec)"
+                  class="group flex gap-3 items-center p-2 rounded-xl border border-gray-200 no-underline bg-white transition-all hover:border-[#009444]/40 hover:shadow-md"
+                >
+                  <span class="w-20 h-14 shrink-0 rounded-lg overflow-hidden bg-gray-100">
+                    <img
+                      :src="recThumb(rec)"
+                      :alt="rec.title"
+                      class="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+                      loading="lazy"
+                    />
+                  </span>
+                  <span class="min-w-0 flex-1">
+                    <span class="block font-montserrat text-[13px] font-bold text-gray-900 leading-snug line-clamp-2 group-hover:text-[#009444] transition-colors">
+                      {{ rec.title }}
+                    </span>
+                    <span class="block font-montserrat text-[11px] font-semibold text-[#009444] mt-1">
+                      {{ Number(rec.price ?? 0) === 0 ? 'Gratis' : 'Lihat detail' }}
+                    </span>
+                  </span>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4 shrink-0 text-gray-300 group-hover:text-[#009444] transition-colors">
+                    <path d="m9 18 6-6-6-6" />
+                  </svg>
+                </RouterLink>
               </div>
             </div>
           </div>
@@ -876,84 +950,171 @@ const goToCourse = (courseSlug) => {
   </div>
 </template>
 
-<style>
-/* Accordion Animation */
-.accordion-enter-active,
-.accordion-leave-active {
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+<style scoped>
+/* ===== Shimmer ===== */
+.shimmer,
+.shimmer-dark {
+  position: relative;
   overflow: hidden;
 }
+.shimmer { background-color: #e5e7eb; }
+.shimmer-dark { background-color: #1f2937; }
 
-.accordion-enter-from {
-  opacity: 0;
-  max-height: 0;
-  transform: translateY(-10px);
+.shimmer::after,
+.shimmer-dark::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  animation: shimmer 1.4s infinite;
+}
+.shimmer::after {
+  background: linear-gradient(90deg, rgba(229,231,235,0) 0%, rgba(255,255,255,0.65) 50%, rgba(229,231,235,0) 100%);
+}
+.shimmer-dark::after {
+  background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.12) 50%, rgba(255,255,255,0) 100%);
+}
+@keyframes shimmer { 100% { transform: translateX(100%); } }
+
+/* ===== Penahan klik pada player YouTube =====
+   Iframe milik domain lain, jadi isinya tidak bisa dimodifikasi. Dua lapisan
+   transparan ini menutup area judul (atas) dan logo YouTube (kanan bawah)
+   agar klik di sana tidak membuka youtube.com di tab baru.
+   Area kontrol (play, volume, seek, fullscreen) sengaja dibiarkan bebas. */
+.yt-guard {
+  position: absolute;
+  z-index: 5;
+  background: transparent;
+  cursor: default;
+}
+.yt-guard--top {
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 62px;
+}
+.yt-guard--logo {
+  right: 0;
+  bottom: 34px;
+  width: 108px;
+  height: 34px;
+}
+@media (max-width: 640px) {
+  .yt-guard--top { height: 46px; }
+  .yt-guard--logo { bottom: 28px; width: 84px; height: 28px; }
 }
 
-.accordion-enter-to {
-  opacity: 1;
-  max-height: 1000px;
-  transform: translateY(0);
+/* ===== Stat cards ===== */
+.stat-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  min-width: 104px;
+  padding: 12px 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  background: #fff;
+  transition: border-color 0.2s;
+}
+.stat-card:hover { border-color: rgba(0, 148, 68, 0.35); }
+.stat-value {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-family: 'Montserrat', sans-serif;
+  font-size: 18px;
+  font-weight: 700;
+  color: #111827;
+  line-height: 1.2;
+}
+.stat-label {
+  font-family: 'Montserrat', sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  color: #6b7280;
 }
 
-.accordion-leave-from {
-  opacity: 1;
-  max-height: 1000px;
-  transform: translateY(0);
+/* ===== Accordion ===== */
+.accordion-enter-active,
+.accordion-leave-active {
+  transition: all 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
 }
-
+.accordion-enter-from,
 .accordion-leave-to {
   opacity: 0;
   max-height: 0;
-  transform: translateY(-10px);
+}
+.accordion-enter-to,
+.accordion-leave-from {
+  opacity: 1;
+  max-height: 900px;
 }
 
- .course-content h1 {
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shimmer::after,
+  .shimmer-dark::after { animation: none; }
+}
+</style>
+
+<style>
+/* Konten materi dari CMS (v-html) — tidak scoped supaya style-nya kena */
+.course-content h1 {
   font-family: 'Montserrat', sans-serif;
-  font-size: 34px;
-  font-weight: bold;
+  font-size: 28px;
+  font-weight: 700;
+  margin: 24px 0 12px;
 }
 .course-content h2 {
   font-family: 'Montserrat', sans-serif;
-  font-size: 24px;
-  font-weight: bold;
+  font-size: 22px;
+  font-weight: 700;
+  margin: 20px 0 10px;
 }
 .course-content h3 {
   font-family: 'Montserrat', sans-serif;
-  font-size: 24px;
-  font-weight: bold;
+  font-size: 18px;
+  font-weight: 700;
+  margin: 16px 0 8px;
 }
 .course-content p {
   font-family: 'Comfortaa', cursive;
   font-size: 15px;
   font-weight: 500;
   line-height: 30px;
+  margin-bottom: 16px;
 }
-.course-content ul {
-  font-family: 'Comfortaa', cursive;
-  font-size: 15px;
-  font-weight: 500;
-  line-height: 30px;
-  list-style-type: disc;
-  padding-left: 20px;
-}
-
-.course-content ul li {
-  list-style-type: disc;
-}
+.course-content p:last-child { margin-bottom: 0; }
+.course-content ul,
 .course-content ol {
   font-family: 'Comfortaa', cursive;
   font-size: 15px;
   font-weight: 500;
   line-height: 30px;
-  list-style-type: decimal;
-  padding-left: 20px;
+  padding-left: 22px;
+  margin-bottom: 16px;
 }
+.course-content ul { list-style-type: disc; }
+.course-content ol { list-style-type: decimal; }
+.course-content ul li { list-style-type: disc; }
 .course-content a {
-  font-family: 'Comfortaa', cursive;
-  font-size: 15px;
-  font-weight: 500;
-  line-height: 30px;
+  color: #009444;
   text-decoration: underline;
+  font-weight: 600;
+}
+.course-content img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 12px;
+  margin: 16px 0;
 }
 </style>

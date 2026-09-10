@@ -6,6 +6,7 @@ import AppHeader from '../../components/AppHeader.vue'
 import AppFooter from '../../components/AppFooter.vue'
 import CardArticle from './CardArticle.vue'
 import Pagination from '../../components/Pagination.vue'
+import ErrorState from '../../components/ErrorState.vue'
 import { getAssetUrl } from '../../utils/assets'
 import api from '../../services/api'
 
@@ -24,6 +25,7 @@ const selectedCategory = ref('all')
 const articles = ref([])
 const featuredArticle = ref(null)
 const loading = ref(false)
+const initialLoading = ref(true)
 const error = ref(null)
 const categories = ref([])
 const categoriesLoading = ref(false)
@@ -91,6 +93,10 @@ onMounted(async () => {
     articles.value = []
     featuredArticle.value = null
     categories.value = []
+  } finally {
+    setTimeout(() => {
+      initialLoading.value = false
+    }, 250)
   }
 })
 
@@ -130,7 +136,7 @@ const fetchPosts = async () => {
     articles.value = list.map(mapPostToCard)
     featuredArticle.value = articles.value[0] || null
   } catch (e) {
-    error.value = e.response?.data?.message || e.message || 'Gagal memuat artikel'
+    error.value = e
     articles.value = []
     featuredArticle.value = null
   } finally {
@@ -222,6 +228,42 @@ const updateItemsPerPage = (newItemsPerPage) => {
 
 <template>
   <div class="min-h-screen relative">
+
+    <!-- ===== Skeleton awal load: header + hero ===== -->
+    <transition name="skeleton-fade">
+      <div v-if="initialLoading" class="fixed inset-0 z-[9998] bg-white overflow-hidden" aria-hidden="true">
+        <!-- Header skeleton -->
+        <div class="h-20 px-4 md:px-9 flex items-center justify-between border-b border-gray-100">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 md:w-12 md:h-12 rounded-full shimmer"></div>
+            <div class="h-5 md:h-6 w-32 md:w-44 rounded shimmer"></div>
+          </div>
+          <div class="hidden md:flex items-center gap-6">
+            <div class="h-4 w-24 rounded shimmer"></div>
+            <div class="h-4 w-24 rounded shimmer"></div>
+            <div class="h-4 w-20 rounded shimmer"></div>
+            <div class="h-4 w-20 rounded shimmer"></div>
+          </div>
+          <div class="h-10 w-20 md:w-24 rounded-lg shimmer"></div>
+        </div>
+
+        <!-- Hero skeleton -->
+        <div class="pt-16 md:pt-24 px-4 max-w-[1440px] mx-auto">
+          <div class="flex items-center justify-center gap-4 md:gap-6 mb-6">
+            <div class="w-12 md:w-24 h-12 md:h-24 rounded-full shimmer"></div>
+            <div class="h-7 md:h-12 w-56 md:w-[520px] rounded shimmer"></div>
+          </div>
+          <div class="mx-auto max-w-3xl h-10 md:h-14 rounded-full shimmer mb-8"></div>
+          <div class="flex items-center justify-center gap-4 mb-6">
+            <div class="h-4 w-14 rounded shimmer"></div>
+            <div class="h-4 w-20 rounded shimmer"></div>
+            <div class="h-4 w-20 rounded shimmer"></div>
+          </div>
+          <div class="mx-auto max-w-[1100px] h-[240px] md:h-[420px] rounded-2xl shimmer"></div>
+        </div>
+      </div>
+    </transition>
+
     <AppHeader :is-authenticated="isAuthenticated" :user="auth.user" @logout="logout" />
 
     <section id="hero" class="relative pt-24 pb-16 text-center overflow-hidden">
@@ -263,7 +305,6 @@ const updateItemsPerPage = (newItemsPerPage) => {
           </template>
         </nav>
         <div v-if="categoriesLoading" class="text-center text-sm text-gray-600">Memuat kategori...</div>
-        <div v-if="error" class="text-center text-sm text-red-600">{{ error }}</div>
         <!-- <div v-if="categoriesError" class="text-center text-sm text-red-600">Terjadi kesalahan memuat kategori</div> -->
 
         <img :src="separatorSrc" alt="Separator" class="w-full max-w-full mt-4" />
@@ -303,7 +344,15 @@ const updateItemsPerPage = (newItemsPerPage) => {
           <p class="text-base md:text-lg inline"> adalah fitur media publikasi dari ByzanEdu yang menyajikan berita, artikel, dan kajian ilmiah seputar dunia pendidikan, filsafat, ekonomi, budaya, dan keislaman. Melalui ByzanPost, pembaca dapat memperluas wawasan intelektual dan spiritual melalui tulisan-tulisan yang inspiratif, analitis, dan berbasis riset.</p>
         </div>
 
-        <div class="mb-6">
+        <!-- Error state -->
+        <ErrorState
+          v-if="error && !loading && paginatedContent.length === 0"
+          :error="error"
+          :loading="loading"
+          @retry="fetchPosts"
+        />
+
+        <div v-else class="mb-6">
           <!-- Loading skeleton -->
           <div v-if="loading" class="grid gap-8 grid-cols-1 md:grid-cols-2 lg:grid-cols-3 mb-8">
             <div v-for="n in itemsPerPage" :key="`art-skel-${n}`" class="rounded-2xl overflow-hidden bg-white border border-gray-200">
@@ -356,6 +405,13 @@ const updateItemsPerPage = (newItemsPerPage) => {
 </template>
 
 <style scoped>
+.skeleton-fade-leave-active {
+  transition: opacity 0.4s ease;
+}
+.skeleton-fade-leave-to {
+  opacity: 0;
+}
+
 .shimmer {
   position: relative;
   overflow: hidden;

@@ -6,12 +6,13 @@ import AppHeader from '../../components/AppHeader.vue'
 import AppFooter from '../../components/AppFooter.vue'
 import { getAssetUrl } from '../../utils/assets'
 import CourseCard from '../../components/CourseCard.vue'
+import ErrorState from '../../components/ErrorState.vue'
 import Pagination from '../../components/Pagination.vue'
 import GetKitabPopup from '../../components/GetKitabPopup.vue'
 import RegisterModal from '../../components/RegisterModal.vue'
 import Login from '../auth/Login.vue'
 import api from '../../services/api'
-import { dummyCourses } from '../../data/dummyCourses.js'
+
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -64,6 +65,7 @@ const aboutLogoSrc = getAssetUrl('e5953eaab12a20f86febfa843fd39a247183b510.png')
 // Fetch courses from API
 const courses = ref([])
 const loadingCourses = ref(false)
+const initialLoading = ref(true)
 const coursesError = ref(null)
 
 const formatPrice = (price) => {
@@ -101,15 +103,19 @@ const fetchCourses = async () => {
     const list = Array.isArray(data) ? data : []
     courses.value = list.map(mapApiCourseToCard)
   } catch (err) {
-    coursesError.value = err.response?.data?.message || err.message
-    courses.value = dummyCourses
+    coursesError.value = err
+    courses.value = []
   } finally {
     loadingCourses.value = false
   }
 }
 
-onMounted(() => {
-  fetchCourses()
+onMounted(async () => {
+  await fetchCourses()
+  // beri jeda singkat supaya transisi shimmer -> konten terasa mulus
+  setTimeout(() => {
+    initialLoading.value = false
+  }, 250)
 })
 
 const featuredCourse = computed(() => courses.value[0] || null)
@@ -140,15 +146,64 @@ const updateItemsPerPage = (newItemsPerPage) => {
 </script>
 
 <template>
-  <div class="w-full max-w-full mx-auto relative bg-white overflow-x-hidden overflow-y-visible">
+  <div class="w-full max-w-full mx-auto relative bg-white overflow-x-clip">
+
+    <!-- ===== Skeleton awal load: header + hero ===== -->
+    <transition name="skeleton-fade">
+      <div v-if="initialLoading" class="fixed inset-0 z-[9998] bg-white overflow-hidden" aria-hidden="true">
+        <!-- Header skeleton -->
+        <div class="h-20 px-4 md:px-9 flex items-center justify-between border-b border-gray-100">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 md:w-12 md:h-12 rounded-full shimmer"></div>
+            <div class="h-5 md:h-6 w-32 md:w-44 rounded shimmer"></div>
+          </div>
+          <div class="hidden md:flex items-center gap-6">
+            <div class="h-4 w-24 rounded shimmer"></div>
+            <div class="h-4 w-24 rounded shimmer"></div>
+            <div class="h-4 w-20 rounded shimmer"></div>
+            <div class="h-4 w-20 rounded shimmer"></div>
+          </div>
+          <div class="h-10 w-20 md:w-24 rounded-lg shimmer"></div>
+          <div class="md:hidden h-6 w-7 rounded shimmer"></div>
+        </div>
+
+        <!-- Hero skeleton -->
+        <div class="pt-10 px-4 md:px-0">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-0">
+            <!-- Video card -->
+            <div class="bg-[#F5F5F5] rounded-4xl lg:rounded-[52px] p-6 md:translate-x-10 xl:translate-x-20">
+              <div class="w-full aspect-video rounded-3xl lg:rounded-[40px] shimmer"></div>
+            </div>
+            <!-- Headline card -->
+            <div class="h-fit w-auto md:w-[90%] md:aspect-video bg-[#F5F5F5] rounded-4xl lg:rounded-[52px] p-6 md:translate-y-1/3 xl:translate-y-1/2 md:-translate-x-10 md:ps-20 xl:ps-40 flex flex-col justify-center">
+              <div class="h-7 md:h-9 w-3/4 rounded shimmer"></div>
+              <div class="h-7 md:h-9 w-2/3 rounded shimmer mt-2"></div>
+              <div class="h-7 md:h-9 w-1/2 rounded shimmer mt-2"></div>
+              <div class="h-4 w-3/5 rounded shimmer mt-4"></div>
+              <div class="h-9 w-36 rounded-[18.6px] shimmer mt-5"></div>
+            </div>
+          </div>
+
+          <!-- Hero course cards skeleton -->
+          <div class="flex flex-wrap gap-5 mx-0 md:mx-10 lg:mx-20 py-10 mt-6 md:mt-24">
+            <div v-for="n in 3" :key="`hero-skel-${n}`" class="w-full md:w-[200px] bg-gray-100 rounded-[18.3px] p-[9px] flex flex-col items-center">
+              <div class="w-full md:w-[182px] h-[114px] rounded-[18.3px] shimmer"></div>
+              <div class="h-5 w-3/4 rounded shimmer mt-3"></div>
+              <div class="h-3 w-1/2 rounded shimmer mt-2"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </transition>
+
 <AppHeader :is-authenticated="isAuthenticated" :user="auth.user" @logout="logout" />
 
-    <section class="pt-10 relative " id="hero">
+    <section class="pt-10 relative overflow-x-clip" id="hero">
       <!-- Background Images with proper layering -->
 
       <div class="absolute top-10 right-0 w-[400px] h-[400px] md:w-[800px] md:h-[800px] pointer-events-none gradient-blob-1"></div>
       <div class="absolute top-[250px] right-[100px] w-[350px] h-[350px] md:w-[700px] md:h-[700px] pointer-events-none gradient-blob-2 animate-sway"></div>
-      <img :src="paperPlaneSrc" alt="paper plane" class="absolute bottom-0 right-[40%] w-[100px] h-auto object-cover object-center z-1 scale-x-[-1] animate-float-slow rotate-12 animate-float"/>
+      <img :src="paperPlaneSrc" alt="paper plane" class="hidden md:block absolute bottom-0 right-[40%] w-[100px] h-auto object-cover object-center z-1 scale-x-[-1] animate-float-slow rotate-12 animate-float"/>
       <img 
         :src="backgroundBgSrc" 
         alt="background" 
@@ -177,14 +232,12 @@ const updateItemsPerPage = (newItemsPerPage) => {
             <img :src="featuredThumbnail" alt="Course video thumbnail" class="w-full aspect-video object-cover rounded-3xl lg:rounded-[40px]" />
             <div class="absolute bottom-0 left-0">
               <div class="relative text-white px-8 py-2">
-                <p class="m-0 text-sm md:text-lg lg:text-xl font-semibold leading-tight text-white">Pengajar</p>
-                <h3 class="m-0 text-lg md:text-xl lg:text-2xl font-bold leading-tight font-montserrat text-white">{{ featuredInstructorName }}</h3>
               </div>
             </div>
           </div>          
         </div>
 
-        <div class="h-fit w-[60%] md:w-[90%] mx-4 md:mx-0 mt-10 md:mt-0 md:aspect-video bg-[#F5F5F5] rounded-4xl lg:rounded-[52px] p-6 md:translate-y-1/3 xl:translate-y-1/2 md:-translate-x-10 lxl:-translate-x-20  md:ps-20 xl:ps-40 relative">
+        <div class="h-fit w-auto md:w-[90%] mx-4 md:mx-0 mt-6 md:mt-0 md:aspect-video bg-[#F5F5F5] rounded-4xl lg:rounded-[52px] p-6 md:translate-y-1/3 xl:translate-y-1/2 md:-translate-x-10 lxl:-translate-x-20  md:ps-20 xl:ps-40 relative">
          <div class="flex flex-col justify-center h-full z-0">
            <h1 class="text-xl md:texl-2xl lg:text-3xl xl:text-4xl 2xl:text-5xl font-bold text-green-600 leading-[1.18] m-0 font-montserrat">
             Khatam Belajar<br />
@@ -198,9 +251,9 @@ const updateItemsPerPage = (newItemsPerPage) => {
           </button>
          </div>
         </div>
-        <div class="absolute bottom-0 right-10 flex flex-col md:hidden gap-2 items-center z-0">
-          <img :src="bookImageSrc" alt="Jurumiyah book" class="w-[100px]" />
-          <button @click="showGetKitab=true" class="inline-flex items-center justify-center md:mt-5 xl:mt-20 px-3 py-1 rounded-[18.6px] font-semibold cursor-pointer border-0 no-underline font-montserrat transition-opacity duration-200 hover:opacity-80 bg-black text-white relative  text-[17.7px]">
+        <div class="flex flex-row md:hidden gap-4 items-center justify-center mx-4 mt-6 z-0">
+          <img :src="bookImageSrc" alt="Jurumiyah book" class="w-[90px] shrink-0" />
+          <button @click="showGetKitab=true" class="inline-flex items-center justify-center px-5 py-2.5 rounded-[18.6px] font-semibold cursor-pointer border-0 no-underline font-montserrat transition-opacity duration-200 hover:opacity-80 bg-black text-white relative">
             <span class="text-white text-sm">Dapatkan Kitab</span>
           </button>
         </div>
@@ -212,23 +265,23 @@ const updateItemsPerPage = (newItemsPerPage) => {
           </button>
         </div>
 
-      <div class="w-full md:w-fit flex flex-wrap gap-5 z-3 mx-4 md:mx-10 lg:mx-20 py-10 relative md:border-b-4  border-gray-200">
+      <div class="w-auto md:w-fit flex flex-wrap gap-4 md:gap-5 z-3 mx-4 md:mx-10 lg:mx-20 py-10 relative md:border-b-4  border-gray-200">
         <RouterLink
           v-for="course in topHeroCourses"
           :key="`hero-${course.id}`"
           :to="`/course/${course.id}`"
-          class="w-full md:w-[200px] bg-gray-100 rounded-[18.3px] backdrop-blur-[10px] shadow-[4.2px_3.5px_9px_0px_rgba(0,0,0,0.05)] text-center p-[9px] flex flex-col items-center"
+          class="w-full min-w-0 max-w-full md:w-[200px] bg-gray-100 rounded-[18.3px] backdrop-blur-[10px] shadow-[4.2px_3.5px_9px_0px_rgba(0,0,0,0.05)] text-center p-[9px] flex flex-col items-center"
         >
-          <div class="w-full md:w-[182px] h-[114px] rounded-[18.3px] overflow-hidden shadow-[inset_1.7px_1.4px_1.4px_0px_rgba(255,255,255,0.25)]">
+          <div class="w-full md:w-[182px] aspect-[182/114] md:h-[114px] md:aspect-auto rounded-[18.3px] overflow-hidden shadow-[inset_1.7px_1.4px_1.4px_0px_rgba(255,255,255,0.25)]">
             <img v-if="course.thumbnail" :src="course.thumbnail" :alt="course.title" class="w-full h-full object-cover" />
             <div v-else class="w-full h-full bg-gray-200"></div>
           </div>
-          <h4 class="text-[22.4px] font-bold text-green-600 my-2 font-montserrat">{{ course.title }}</h4>
-          <p class="text-[8.9px] font-semibold m-0 font-montserrat">{{ course.is_free ? 'Click Here For Free Course' : formatPrice(course.price) }}</p>
+          <h4 class="w-full text-lg md:text-[22.4px] font-bold text-green-600 my-2 font-montserrat line-clamp-2 break-words">{{ course.title }}</h4>
+          <p class="text-xs md:text-[8.9px] font-semibold m-0 font-montserrat text-gray-600">{{ course.is_free ? 'Click Here For Free Course' : formatPrice(course.price) }}</p>
         </RouterLink>
       </div>
     </section>
-<section class="relative lg:min-h-screen flex gap-10 overflow-visible pt-20" id="about">
+<section class="relative lg:min-h-screen flex gap-10 overflow-visible pt-12 md:pt-20" id="about">
     <img :src="aboutLinesSrc" alt="background lines" class=" absolute -top-[15%] w-[125%] right-[17%] z-1 object-cover object-center animate-drift" >
     <img :src="aboutGradientSrc" alt="background gradient" class="absolute z-0 block min-w-full min-h-full object-cover object-center animate-gradient-pulse max-w-none" style="width: 2882px; height: 1922px; top: -242px; right: 0; transform: rotate(180deg);">
 
@@ -254,12 +307,20 @@ const updateItemsPerPage = (newItemsPerPage) => {
     </div>
 </section>
 
-  <section class="relative py-20 ">
-    <div class="max-w-[1444px] rounded-4xl mx-auto px-8 md:px-12 lg:px-20 py-8 bg-white">
+  <section class="relative py-12 md:py-20 ">
+    <div class="max-w-[1444px] rounded-4xl mx-auto px-4 md:px-12 lg:px-20 py-8 bg-white">
+      <!-- Error state: menggantikan seluruh daftar kursus bila gagal & kosong -->
+      <ErrorState
+        v-if="coursesError && !loadingCourses && courses.length === 0"
+        :error="coursesError"
+        :loading="loadingCourses"
+        @retry="fetchCourses"
+      />
+
       <!-- Kursus Populer -->
-      <div class="mb-[60px]">
+      <div v-if="!coursesError || courses.length > 0" class="mb-[60px]">
         <h3 class="text-xl font-bold text-black font-montserrat">Kursus populer</h3>
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 pt-6">
+        <div class="grid grid-cols-2 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 md:gap-4 pt-6 items-stretch">
           <template v-if="loadingCourses">
             <div
               v-for="n in 8"
@@ -289,14 +350,14 @@ const updateItemsPerPage = (newItemsPerPage) => {
       </div>
 
       <!-- All Courses -->
-      <div class="mb-[60px]">
+      <div v-if="!coursesError || courses.length > 0" class="mb-[60px]">
         <h3 class="text-xl font-bold text-black font-montserrat mb-6">
           Semua Kursus
           <span v-if="!loadingCourses">({{ courses.length }} kursus)</span>
         </h3>
         
         <!-- Courses Grid -->
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 py-6 mb-8">
+        <div class="grid grid-cols-2 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 md:gap-4 py-6 mb-8 items-stretch">
           <template v-if="loadingCourses">
             <div
               v-for="n in itemsPerPage"
@@ -387,6 +448,14 @@ const updateItemsPerPage = (newItemsPerPage) => {
   background: radial-gradient(circle, rgba(22, 163, 74, 0.8) 0%, rgba(34, 197, 94, 0.6) 40%, rgba(5, 150, 105, 0.35) 70%, transparent 100%);
   border-radius: 60% 40% 50% 50% / 55% 45% 55% 45%;
   filter: blur(28px);
+}
+
+/* ===== Skeleton fade out ===== */
+.skeleton-fade-leave-active {
+  transition: opacity 0.4s ease;
+}
+.skeleton-fade-leave-to {
+  opacity: 0;
 }
 
 /* ===== Shimmer loading ===== */

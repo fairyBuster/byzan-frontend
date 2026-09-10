@@ -2,6 +2,7 @@
 import { onMounted, onBeforeUnmount } from 'vue'
 import { useAuthStore } from './stores/auth'
 import { useRouter } from 'vue-router'
+import FloatingChatWidget from './components/FloatingChatWidget.vue'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -70,11 +71,13 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
- 
+
   <main class="content">
     <router-view />
   </main>
-  
+
+  <FloatingChatWidget />
+
 </template>
 
 <style scoped>

@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { installMockApi } from './mockApi'
 
 function getCookie(name) {
   const value = `; ${document.cookie}`
@@ -47,6 +48,15 @@ api.interceptors.request.use((config) => {
   }
   return config
 })
+
+// ===== MOCK MODE =====
+// Didaftarkan SETELAH interceptor auth di atas, supaya header tetap terpasang
+// (walau tidak dipakai) dan urutan interceptor tidak berubah saat mock mati.
+// Aktif hanya bila .env.local berisi VITE_USE_MOCK=true
+if (import.meta.env.VITE_USE_MOCK === 'true') {
+  installMockApi(api)
+}
+// =====================
 
 // Auto-refresh access token on 401 and retry original request
 api.interceptors.response.use(

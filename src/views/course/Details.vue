@@ -7,6 +7,7 @@ import AppFooter from '../../components/AppFooter.vue'
 import { getAssetUrl } from '../../utils/assets'
 import SuccessModal from '../../components/SuccessModal.vue'
 import ErrorModal from '../../components/ErrorModal.vue'
+import ErrorState from '../../components/ErrorState.vue'
 import api from '../../services/api'
 import { buyFreeCourse } from '../../services/coursePayment'
 import { dummyCourses } from '../../data/dummyCourses.js'
@@ -49,6 +50,7 @@ const reviews = ref([])
 const reviewsLoading = ref(false)
 const reviewsError = ref(null)
 const myRating = ref(0)
+const descExpanded = ref(false)
 const postingReview = ref(false)
 const showReviewSuccess = ref(false)
 const showReviewError = ref(false)
@@ -127,6 +129,11 @@ const episodeTwo = computed(() => {
   let target = list.find(ep => (ep.order_index || ep.episode) === 2)
   if (!target) target = list[1] || list[0] || null
   return target
+})
+
+const hasLongDescription = computed(() => {
+  const d = String(course.value?.description || '')
+  return d.length > 140
 })
 
 const previewChapters = computed(() => {
@@ -352,7 +359,8 @@ const loadCourseDetails = async () => {
     await fetchComments()
     await fetchReviews()
   } catch (e) {
-    error.value = e.response?.data?.message || e.message || 'Gagal memuat data course'
+    // simpan error mentah supaya ErrorState bisa deteksi jenis errornya
+    error.value = e
     const fallback = dummyCourses.find((c) => c.id === Number(courseId)) || dummyCourses[0] || null
     if (fallback) {
       course.value = fallback
@@ -514,20 +522,25 @@ const handleBuyError = (e) => {
       @close="showReviewError = false"
     />
 
-    <section id="hero" class="relative w-full h-screen flex flex-col justify-end items-start text-white overflow-hidden">
+    <section id="hero" class="relative w-full min-h-[85vh] md:h-screen flex flex-col justify-end items-start text-white overflow-hidden">
       <div class="absolute -top-[75px] left-0 w-full h-[calc(100%+75px)]">
         <div v-if="loading" class="absolute inset-0 shimmer-dark"></div>
         <img v-else :src="heroImageSrc" :alt="course?.title || 'Course background'" class="w-full h-full object-cover" />
+        <!-- Scrim atas: header tetap kebaca -->
         <div class="absolute top-0 left-0 w-full h-1/4 bg-gradient-to-b from-black/60 to-transparent"></div>
-        <!-- Transparent Teal to Green Gradient Overlay -->
+        <!-- Teal to Green brand overlay -->
         <div class="absolute bottom-0 left-0 w-full h-3/4 bg-gradient-to-t from-primary via-primary/40 to-transparent"></div>
-        <!-- Scrim tambahan supaya teks kiri-bawah tetap kebaca di atas gambar -->
+        <!-- Scrim diagonal kiri: teks kiri tetap kebaca -->
         <div class="absolute bottom-0 left-0 w-full h-full bg-gradient-to-r from-black/60 via-black/25 to-transparent"></div>
-        <!-- Vertical scrim bawah khusus area teks -->
-        <div class="absolute bottom-0 left-0 w-full h-1/2 bg-gradient-to-t from-black/50 to-transparent"></div>
+        <!-- Scrim vertikal bawah (ala Netflix), lebih pekat di mobile -->
+        <div class="absolute bottom-0 left-0 w-full h-2/3 md:h-1/2 bg-gradient-to-t from-black/85 via-black/55 to-transparent md:from-black/60 md:via-black/20"></div>
+        <!-- SAFETY LAYER: base solid gelap di zona teks.
+             Ini jaminan kontras kalau thumbnail-nya terang/putih, karena gradient
+             transparan saja tidak cukup di atas gambar putih. -->
+        <div class="absolute bottom-0 left-0 w-full h-[45%] md:h-[38%] bg-black/45 md:bg-black/35"></div>
       </div>
 
-      <div v-if="loading" class="relative z-10 flex flex-col gap-4 py-12 justify-end px-8 md:px-20 lg:px-24 max-w-full md:max-w-[640px] lg:max-w-[720px]">
+      <div v-if="loading" class="relative z-10 w-full flex flex-col gap-3 md:gap-4 py-8 md:py-12 justify-end px-5 md:px-20 lg:px-24 max-w-full md:max-w-[640px] lg:max-w-[720px]">
         <div class="h-10 md:h-12 w-3/4 rounded-lg shimmer-light"></div>
         <div class="h-5 w-1/2 rounded shimmer-light mt-2"></div>
         <div class="flex gap-3 mt-4">
@@ -538,35 +551,48 @@ const handleBuyError = (e) => {
         <div class="h-4 w-full max-w-[420px] rounded shimmer-light mt-4"></div>
         <div class="h-4 w-3/4 max-w-[380px] rounded shimmer-light mt-2"></div>
       </div>
-      <div v-else class="relative z-10 flex flex-col gap-4 py-12 justify-end px-8 md:px-20 lg:px-24 max-w-full md:max-w-[640px] lg:max-w-[720px]">
-        <h1 class="font-['Montserrat'] text-3xl md:text-4xl lg:text-5xl font-bold leading-tight mb-1 md:mb-3 drop-shadow-[0_2px_10px_rgba(0,0,0,0.7)]">
+      <div v-else class="hero-text relative z-10 w-full flex flex-col gap-3 md:gap-4 py-8 md:py-12 justify-end px-5 md:px-20 lg:px-24 max-w-full md:max-w-[640px] lg:max-w-[720px]">
+        <h1 class="font-['Montserrat'] text-2xl md:text-4xl lg:text-5xl font-bold leading-tight mb-0 md:mb-3 drop-shadow-[0_2px_10px_rgba(0,0,0,0.7)]">
           {{ course?.title || 'Kursus ilmu Jurumiyah' }}
         </h1>
-        <p class="font-['Montserrat'] text-sm md:text-md lg:text-xl font-medium mb-6 md:mb-11 drop-shadow-[0_1px_6px_rgba(0,0,0,0.6)]">
+        <p class="font-['Montserrat'] text-xs md:text-md lg:text-xl font-medium text-white/85 mb-3 md:mb-11 drop-shadow-[0_1px_6px_rgba(0,0,0,0.6)]">
           {{ course?.subtitle || 'Dengan Metode Mesir' }} | {{ episodes.length || 0 }} Episode
         </p>
 
-        <div class="flex flex-wrap items-center gap-3 md:gap-4">
-           <RouterLink :to="`/course/${course?.id}/learning`" class="flex items-center justify-center h-12 px-6 md:px-8 lg:px-12 bg-white/50 rounded-lg border-0 cursor-pointer transition-opacity duration-200 hover:opacity-80"
+        <div class="flex flex-wrap items-center gap-2.5 md:gap-4 mb-1">
+           <RouterLink :to="`/course/${course?.id}/learning`" class="flex items-center justify-center h-11 md:h-12 px-5 md:px-8 lg:px-12 bg-white/50 rounded-lg border-0 cursor-pointer transition-opacity duration-200 hover:opacity-80"
           >
-            <img :src="playIconSrc" alt="Play Icon" class="w-8" />
+            <img :src="playIconSrc" alt="Play Icon" class="w-6 md:w-8" />
           </RouterLink>
-          <button class="flex items-center justify-center h-[50px] w-[50px] bg-transparent border-0 cursor-pointer transition-opacity duration-200 hover:opacity-80" @click="showInfo">
+          <button class="flex items-center justify-center h-11 w-11 md:h-[50px] md:w-[50px] bg-transparent border-0 cursor-pointer transition-opacity duration-200 hover:opacity-80" @click="showInfo">
             <img :src="infoIconSrc" alt="Info Icon" class="w-full h-full" />
           </button>
           <button
-            class="flex items-center justify-center h-[50px] min-w-[150px] px-4 bg-[#009444] text-white rounded-lg border-0 cursor-pointer font-['Montserrat'] font-semibold transition-opacity duration-200 hover:opacity-80 disabled:opacity-60 disabled:cursor-not-allowed"
+            class="flex items-center justify-center h-11 md:h-[50px] min-w-[130px] md:min-w-[150px] px-4 text-sm md:text-base bg-[#009444] text-white rounded-lg border-0 cursor-pointer font-['Montserrat'] font-semibold transition-opacity duration-200 hover:opacity-80 disabled:opacity-60 disabled:cursor-not-allowed"
             :disabled="buying || isEnrolled"
             @click="handleBuy"
-            :title="isEnrolled ? 'Sudah enroll' : (isFreeCourse ? 'Enroll Gratis' : 'Beli Course')"
+            :title="buying ? 'Memproses...' : (isEnrolled ? 'Sudah enroll' : (isFreeCourse ? 'Enroll Gratis' : 'Beli Course'))"
           >
             {{ isEnrolled ? 'Sudah Enroll' : (isFreeCourse ? 'Enroll Gratis' : 'Beli Course') }}
           </button>
         </div>
 
-        <p class="font-['Montserrat'] text-[15px] font-medium leading-relaxed text-justify max-w-[533px]">
-          {{ course?.description || 'Kitab Jurumiyah merupakan gerbang awal dalam mempelajari tata bahasa Arab — kunci penting untuk memahami Al-Qur\'an, hadits, dan literatur keislaman klasik.' }}
-        </p>
+        <div class="max-w-[533px]">
+          <p
+            class="font-['Montserrat'] text-sm md:text-[15px] font-medium leading-relaxed text-left md:text-justify text-white/90 drop-shadow-[0_1px_6px_rgba(0,0,0,0.6)]"
+            :class="descExpanded ? '' : 'line-clamp-3 md:line-clamp-none'"
+          >
+            {{ course?.description || 'Kitab Jurumiyah merupakan gerbang awal dalam mempelajari tata bahasa Arab — kunci penting untuk memahami Al-Qur\'an, hadits, dan literatur keislaman klasik.' }}
+          </p>
+          <button
+            v-if="hasLongDescription"
+            type="button"
+            class="md:hidden mt-1.5 text-sm font-semibold text-white/90 underline underline-offset-2 bg-transparent border-0 cursor-pointer p-0"
+            @click="descExpanded = !descExpanded"
+          >
+            {{ descExpanded ? 'Lebih sedikit' : 'Selengkapnya' }}
+          </button>
+        </div>
       </div>
     </section>
 
@@ -576,7 +602,7 @@ const handleBuyError = (e) => {
         <img :src="playlistBgSrc" alt="Decorative background" class="w-full h-full object-contain" />
       </div>
 
-      <div class="mx-auto px-6 md:px-20 lg:px-24 relative z-10">
+      <div class="mx-auto px-5 md:px-20 lg:px-24 relative z-10">
         <!-- Inline Multi Video Preview (3 items) -->
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 items-start mb-8" v-if="!loading && previewEpisodes.length > 0">
           <div class="flex flex-col gap-2" v-for="ep in previewEpisodes" :key="ep.id">
@@ -653,32 +679,14 @@ const handleBuyError = (e) => {
           <div class="h-40 w-full rounded-2xl shimmer-light"></div>
         </template>
 
-        <div v-if="error && !previewChapters.length && !previewEpisodes.length" class="mb-10">
-          <div class="mx-auto max-w-lg bg-white/10 border border-white/15 rounded-2xl backdrop-blur-md shadow-[0px_3px_12px_rgba(0,0,0,0.2)] px-6 py-8 text-center">
-            <div class="mx-auto mb-4 flex items-center justify-center w-14 h-14 rounded-full bg-white/15">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-7 h-7 text-white">
-                <path d="M12 9v4" /><path d="M12 17h.01" />
-                <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-              </svg>
-            </div>
-            <h4 class="font-['Montserrat'] text-lg font-bold text-white m-0 mb-1">Gagal memuat konten</h4>
-            <p class="font-['Montserrat'] text-sm text-white/80 m-0 mb-5 leading-relaxed">
-              Sepertinya ada gangguan koneksi ke server. Cek koneksi internetmu, lalu coba lagi.
-            </p>
-            <button
-              type="button"
-              class="inline-flex items-center gap-2 bg-white text-primary hover:bg-white/90 border-0 rounded-lg px-5 py-2.5 cursor-pointer font-['Montserrat'] font-semibold transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-              :disabled="loading"
-              @click="loadCourseDetails"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4" :class="loading ? 'animate-spin' : ''">
-                <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" />
-                <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" /><path d="M8 16H3v5" />
-              </svg>
-              {{ loading ? 'Memuat...' : 'Coba Lagi' }}
-            </button>
-          </div>
-        </div>
+        <!-- Error state (user friendly, otomatis kenali jenis error) -->
+        <ErrorState
+          v-if="error && !loading && !previewChapters.length && !previewEpisodes.length"
+          :error="error"
+          :loading="loading"
+          variant="dark"
+          @retry="loadCourseDetails"
+        />
 
         <div v-if="!loading" class="relative flex flex-col-reverse lg:flex-row items-center lg:items-end gap-6 lg:gap-4">
           <div class="bg-white/10 border border-white/15 rounded-t-[20px] rounded-br-[20px] backdrop-blur-md shadow-[0px_3px_12px_rgba(0,0,0,0.2)] p-6 md:p-10 lg:p-8 w-full lg:flex-1 text-white font-['Comfortaa'] text-base md:text-xl lg:text-lg xl:text-xl leading-relaxed text-justify h-fit my-6 lg:my-12">
@@ -825,6 +833,38 @@ const handleBuyError = (e) => {
   background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.35) 50%, rgba(255,255,255,0) 100%);
 }
 @keyframes shimmer { 100% { transform: translateX(100%); } }
+
+/* Jaminan keterbacaan teks hero di atas gambar terang maupun gelap.
+   text-shadow bekerja di segala background, tidak seperti overlay yang
+   bergantung pada warna gambar di belakangnya. */
+.hero-text h1 {
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.85), 0 0 24px rgba(0, 0, 0, 0.5);
+}
+.hero-text p,
+.hero-text button,
+.hero-text a {
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.8);
+}
+.hero-text .bg-\[\#009444\],
+.hero-text .bg-white\/50 {
+  text-shadow: none;
+}
+
+.line-clamp-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+@media (min-width: 768px) {
+  .md\:line-clamp-none {
+    -webkit-line-clamp: unset;
+    line-clamp: unset;
+    display: block;
+    overflow: visible;
+  }
+}
 
 @media (prefers-reduced-motion: reduce) {
   .shimmer-dark::after,

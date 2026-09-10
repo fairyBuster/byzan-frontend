@@ -1,9 +1,11 @@
 <script setup>
-import { reactive, computed } from 'vue'
+import { reactive, ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../../stores/auth'
 import AppHeader from '../../components/AppHeader.vue'
 import AppFooter from '../../components/AppFooter.vue'
+import SuccessModal from '../../components/SuccessModal.vue'
+import ErrorModal from '../../components/ErrorModal.vue'
 import { getAssetUrl } from '../../utils/assets'
 
 const auth = useAuthStore()
@@ -24,6 +26,16 @@ const form = reactive({
   city: '',
 })
 
+const submitting = ref(false)
+const showSuccess = ref(false)
+const showError = ref(false)
+// Error mentah axios -> diterjemahkan oleh ErrorModal
+const registerError = ref(null)
+// Pesan hasil validasi sisi klien (tidak ada objek axios)
+const clientError = ref('')
+// Pesan error per kolom
+const fieldErrors = reactive({})
+
 const isAuthenticated = computed(() => auth.isAuthenticated)
 
 const logout = () => {
@@ -31,20 +43,18 @@ const logout = () => {
   router.push('/')
 }
 
-const selectGender = (gender) => {
-  form.gender = gender
+const clearErrors = () => {
+  showError.value = false
+  registerError.value = null
+  clientError.value = ''
+  Object.keys(fieldErrors).forEach((k) => delete fieldErrors[k])
 }
 
-// Convert date from YYYY-MM-DD to DD/MM/YYYY (avoid timezone issues)
-const formatBirthday = (dateString) => {
-  if (!dateString) return ''
-  const parts = dateString.split('-')
-  if (parts.length !== 3) return ''
-  const [year, month, day] = parts
-  return `${day.padStart(2,'0')}/${month.padStart(2,'0')}/${year}`
+const clearField = (name) => {
+  if (fieldErrors[name]) delete fieldErrors[name]
 }
 
-// Normalize phone number to E.164 for Indonesia (+62)
+// Normalisasi nomor telepon ke E.164 Indonesia (+62)
 const normalizePhone = (phone) => {
   if (!phone) return ''
   const digits = String(phone).replace(/[^\d+]/g, '')
@@ -54,15 +64,87 @@ const normalizePhone = (phone) => {
   return `+62${digits}`
 }
 
-const onSubmit = async () => {
-  // Validate password match
-  if (form.password !== form.password2) {
-    auth.error = 'Password tidak cocok'
-    return
+// Validasi klien: pesannya paling spesifik dan tidak perlu menunggu server
+const validate = () => {
+  const required = {
+    gender: 'Jenis kelamin wajib dipilih.',
+    firstName: 'Nama depan wajib diisi.',
+    lastName: 'Nama belakang wajib diisi.',
+    email: 'Email wajib diisi.',
+    username: 'Username wajib diisi.',
+    phone_number: 'Nomor telepon wajib diisi.',
+    birthday: 'Tanggal lahir wajib diisi.',
+    country: 'Negara wajib diisi.',
+    city: 'Kota wajib diisi.',
+    password: 'Password wajib diisi.',
+    password2: 'Konfirmasi password wajib diisi.',
   }
 
+  for (const [key, message] of Object.entries(required)) {
+    if (!String(form[key] || '').trim()) fieldErrors[key] = message
+  }
+
+  if (form.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(form.email.trim())) {
+    fieldErrors.email = 'Format email tidak valid. Contoh: nama@email.com'
+  }
+  if (form.username && form.username.trim().length < 3) {
+    fieldErrors.username = 'Username minimal 3 karakter.'
+  }
+  if (form.phone_number && String(form.phone_number).replace(/\D/g, '').length < 9) {
+    fieldErrors.phone_number = 'Nomor telepon tidak valid.'
+  }
+  if (form.password && form.password.length < 8) {
+    fieldErrors.password = 'Password minimal 8 karakter.'
+  }
+  if (form.password && form.password2 && form.password !== form.password2) {
+    fieldErrors.password2 = 'Konfirmasi password tidak sama dengan password.'
+  }
+  if (form.birthday) {
+    const birth = new Date(form.birthday)
+    if (!Number.isNaN(birth.getTime()) && birth > new Date()) {
+      fieldErrors.birthday = 'Tanggal lahir tidak boleh di masa depan.'
+    }
+  }
+
+  const messages = Object.values(fieldErrors)
+  if (messages.length) {
+    // Tampilkan maksimal 4 supaya modal tidak kepanjangan
+    clientError.value = messages.slice(0, 4).join('\n')
+      + (messages.length > 4 ? `\n(dan ${messages.length - 4} isian lain)` : '')
+    showError.value = true
+    return false
+  }
+  return true
+}
+
+// Petakan error backend ke kolom yang bersangkutan
+const applyFieldErrors = (error) => {
+  const data = error?.response?.data
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return
+  const pick = (v) => (Array.isArray(v) ? v.join(' ') : String(v))
+  const map = {
+    email: 'email',
+    username: 'username',
+    password: 'password',
+    confirm_password: 'password2',
+    phone: 'phone_number',
+    full_name: 'firstName',
+  }
+  for (const [apiKey, formKey] of Object.entries(map)) {
+    if (data[apiKey]) fieldErrors[formKey] = pick(data[apiKey])
+  }
+}
+
+const onSubmit = async () => {
+  clearErrors()
+  if (!validate()) return
+
+  submitting.value = true
   try {
-    const fullName = `${String(form.firstName || '').trim()} ${String(form.lastName || '').trim()}`.trim().replace(/\s+/g, ' ')
+    const fullName = `${String(form.firstName || '').trim()} ${String(form.lastName || '').trim()}`
+      .trim()
+      .replace(/\s+/g, ' ')
+
     const payload = {
       full_name: fullName,
       username: form.username,
@@ -73,9 +155,14 @@ const onSubmit = async () => {
     }
 
     await auth.register(payload)
-    router.push('/')
+    showSuccess.value = true
+    setTimeout(() => router.push('/'), 1200)
   } catch (e) {
-    // Error ditampilkan di bawah
+    applyFieldErrors(e)
+    registerError.value = e
+    showError.value = true
+  } finally {
+    submitting.value = false
   }
 }
 
@@ -85,22 +172,33 @@ const bannerBgSrc = getAssetUrl('a4172cfc499709269cb30af84c815743998b654c.png')
 const profilePicSrc = getAssetUrl('418ce2a6ab9bbfb81b05025a5cbf21a6e735def0.png')
 const addPhotoIconSrc = getAssetUrl('189_554.svg')
 const addPhotoBgSrc = getAssetUrl('6ccd223db609c590b56edaca230b879807e5948a.png')
-// Radio button icons
-// Selected: 189_506.svg = Male, 189_509.svg = Female  
-// Unselected: 189_252.svg = unselected male, 189_253.svg = unselected female
-const maleRadioSelectedSrc = getAssetUrl('189_506.svg')
-const femaleRadioSelectedSrc = getAssetUrl('189_509.svg')
-const maleRadioUnselectedSrc = getAssetUrl('189_252.svg')
-const femaleRadioUnselectedSrc = getAssetUrl('189_253.svg')
 const verifiedIconSrc = getAssetUrl('189_520.svg')
 const dropdownArrowSrc = getAssetUrl('b68de90c44e40ada0ed4723e2922d3b77ad3c496.png')
-const calendarIconSrc = getAssetUrl('63ef912b6bfe38e6d5bc8586f55fe1b9d46a5ac4.png')
 const paperPlaneSrc = getAssetUrl('15f47f71f80b6474e00a66edd9fef321a837f795.png')
+
+const isEmailValid = computed(() =>
+  /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(form.email || '').trim())
+)
 </script>
 
 <template>
   <div class="page-wrapper" :style="{ backgroundImage: `url('${backgroundGradientSrc}')` }">
     <AppHeader :is-authenticated="isAuthenticated" :user="auth.user" @logout="logout" />
+
+    <SuccessModal
+      :show="showSuccess"
+      title="Pendaftaran Berhasil"
+      message="Akun Anda berhasil dibuat. Selamat datang di Byzan Education!"
+      @close="showSuccess = false"
+    />
+    <ErrorModal
+      :show="showError"
+      title="Pendaftaran Gagal"
+      :error="registerError"
+      :message="clientError"
+      context="register"
+      @close="showError = false"
+    />
 
     <main class="account-section">
       <div class="banner-bg" :style="{ backgroundImage: `url('${bannerBgSrc}')` }"></div>
@@ -108,72 +206,128 @@ const paperPlaneSrc = getAssetUrl('15f47f71f80b6474e00a66edd9fef321a837f795.png'
       <div class="container account-container">
         <aside class="profile-sidebar">
           <div class="profile-picture-wrapper">
-            <img :src="profilePicSrc" alt="User profile picture" class="profile-picture" />
-            <button type="button" class="add-photo-btn" aria-label="Add photo">
-              <img :src="addPhotoIconSrc" alt="Add photo icon background" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%" />
-              <img :src="addPhotoBgSrc" alt="Add photo icon" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%" />
+            <img :src="profilePicSrc" alt="Foto profil" class="profile-picture" />
+            <button type="button" class="add-photo-btn" aria-label="Tambah foto">
+              <img :src="addPhotoIconSrc" alt="" aria-hidden="true" />
+              <img :src="addPhotoBgSrc" alt="" aria-hidden="true" />
             </button>
           </div>
-          <h2 class="profile-name">Your Full Name</h2>
+          <h2 class="profile-name">
+            {{ (form.firstName || form.lastName) ? `${form.firstName} ${form.lastName}`.trim() : 'Your Full Name' }}
+          </h2>
           <p class="profile-role">author</p>
-          <button type="button" class="btn btn-dark">Edit Profile</button>
         </aside>
 
-        <form class="account-form" @submit.prevent="onSubmit">
+        <form class="account-form" @submit.prevent="onSubmit" novalidate>
           <h1 class="form-title">Create Account</h1>
 
           <div class="form-grid">
-             <div class="form-group">
-            <label for="gender">Gender<span class="required-star">*</span></label>
-            <select id="gender" v-model="form.gender" class="form-control" required>
-              <option disabled value="">Select gender</option>
-              <option value="male">Male</option>
-              <option value="female">Female</option>
-            </select>
-          </div>
+            <div class="form-group">
+              <label for="gender">Gender<span class="required-star">*</span></label>
+              <select
+                id="gender"
+                v-model="form.gender"
+                class="form-control"
+                :class="{ 'form-control--error': fieldErrors.gender }"
+                @change="clearField('gender')"
+              >
+                <option disabled value="">Pilih jenis kelamin</option>
+                <option value="male">Male</option>
+                <option value="female">Female</option>
+              </select>
+              <p v-if="fieldErrors.gender" class="field-error">{{ fieldErrors.gender }}</p>
+            </div>
+
             <div class="form-group">
               <label for="first-name">First Name<span class="required-star">*</span></label>
-              <input type="text" id="first-name" v-model="form.firstName" class="form-control" required />
+              <input
+                type="text"
+                id="first-name"
+                v-model="form.firstName"
+                class="form-control"
+                :class="{ 'form-control--error': fieldErrors.firstName }"
+                @input="clearField('firstName')"
+              />
+              <p v-if="fieldErrors.firstName" class="field-error">{{ fieldErrors.firstName }}</p>
             </div>
 
             <div class="form-group">
               <label for="last-name">Last Name<span class="required-star">*</span></label>
-              <input type="text" id="last-name" v-model="form.lastName" class="form-control" required />
+              <input
+                type="text"
+                id="last-name"
+                v-model="form.lastName"
+                class="form-control"
+                :class="{ 'form-control--error': fieldErrors.lastName }"
+                @input="clearField('lastName')"
+              />
+              <p v-if="fieldErrors.lastName" class="field-error">{{ fieldErrors.lastName }}</p>
             </div>
 
             <div class="form-group">
-              <label for="gmail">Gmail<span class="required-star">*</span></label>
+              <label for="gmail">Email<span class="required-star">*</span></label>
               <div class="input-wrapper">
-                <input type="email" id="gmail" v-model="form.email" class="form-control" required />
-                <div class="verified-badge">
-                  <img :src="verifiedIconSrc" alt="Verified icon" />
-                  <span>Verified</span>
+                <input
+                  type="email"
+                  id="gmail"
+                  v-model="form.email"
+                  class="form-control"
+                  :class="{ 'form-control--error': fieldErrors.email }"
+                  autocomplete="email"
+                  @input="clearField('email')"
+                />
+                <div v-if="isEmailValid && !fieldErrors.email" class="verified-badge">
+                  <img :src="verifiedIconSrc" alt="" aria-hidden="true" />
+                  <span>Valid</span>
                 </div>
               </div>
+              <p v-if="fieldErrors.email" class="field-error">{{ fieldErrors.email }}</p>
             </div>
 
             <div class="form-group">
               <label for="phone_number">Phone Number<span class="required-star">*</span></label>
               <div class="input-wrapper">
-                <input type="tel" id="phone_number" v-model="form.phone_number" class="form-control phone-input" required />
+                <input
+                  type="tel"
+                  id="phone_number"
+                  v-model="form.phone_number"
+                  class="form-control phone-input"
+                  :class="{ 'form-control--error': fieldErrors.phone_number }"
+                  placeholder="81234567890"
+                  @input="clearField('phone_number')"
+                />
                 <div class="country-code-badge">
                   <span>+62</span>
-                  <img :src="dropdownArrowSrc" alt="Dropdown arrow" />
+                  <img :src="dropdownArrowSrc" alt="" aria-hidden="true" />
                 </div>
               </div>
+              <p v-if="fieldErrors.phone_number" class="field-error">{{ fieldErrors.phone_number }}</p>
             </div>
 
             <div class="form-group">
               <label for="birthday">Birthday<span class="required-star">*</span></label>
-              <div class="input-wrapper">
-                <input type="date" id="birthday" v-model="form.birthday" class="form-control" required />
-              
-              </div>
+              <input
+                type="date"
+                id="birthday"
+                v-model="form.birthday"
+                class="form-control"
+                :class="{ 'form-control--error': fieldErrors.birthday }"
+                @input="clearField('birthday')"
+              />
+              <p v-if="fieldErrors.birthday" class="field-error">{{ fieldErrors.birthday }}</p>
             </div>
 
             <div class="form-group">
               <label for="country">Country<span class="required-star">*</span></label>
-              <input type="text" id="country" v-model="form.country" class="form-control" required />
+              <input
+                type="text"
+                id="country"
+                v-model="form.country"
+                class="form-control"
+                :class="{ 'form-control--error': fieldErrors.country }"
+                @input="clearField('country')"
+              />
+              <p v-if="fieldErrors.country" class="field-error">{{ fieldErrors.country }}</p>
             </div>
 
             <div class="form-group grid-full-width">
@@ -183,35 +337,70 @@ const paperPlaneSrc = getAssetUrl('15f47f71f80b6474e00a66edd9fef321a837f795.png'
 
             <div class="form-group grid-full-width">
               <label for="city">City<span class="required-star">*</span></label>
-              <input type="text" id="city" v-model="form.city" class="form-control" required />
+              <input
+                type="text"
+                id="city"
+                v-model="form.city"
+                class="form-control"
+                :class="{ 'form-control--error': fieldErrors.city }"
+                @input="clearField('city')"
+              />
+              <p v-if="fieldErrors.city" class="field-error">{{ fieldErrors.city }}</p>
             </div>
 
             <div class="form-group grid-full-width">
               <label for="username">Username<span class="required-star">*</span></label>
-              <input type="text" id="username" v-model="form.username" class="form-control" required />
+              <input
+                type="text"
+                id="username"
+                v-model="form.username"
+                class="form-control"
+                :class="{ 'form-control--error': fieldErrors.username }"
+                autocomplete="username"
+                @input="clearField('username')"
+              />
+              <p v-if="fieldErrors.username" class="field-error">{{ fieldErrors.username }}</p>
             </div>
 
             <div class="form-group">
               <label for="password">Password<span class="required-star">*</span></label>
-              <input type="password" id="password" v-model="form.password" class="form-control" required />
+              <input
+                type="password"
+                id="password"
+                v-model="form.password"
+                class="form-control"
+                :class="{ 'form-control--error': fieldErrors.password }"
+                autocomplete="new-password"
+                @input="clearField('password')"
+              />
+              <p v-if="fieldErrors.password" class="field-error">{{ fieldErrors.password }}</p>
+              <p v-else class="field-hint">Minimal 8 karakter.</p>
             </div>
 
             <div class="form-group">
               <label for="password2">Repeat Password<span class="required-star">*</span></label>
-              <input type="password" id="password2" v-model="form.password2" class="form-control" required />
+              <input
+                type="password"
+                id="password2"
+                v-model="form.password2"
+                class="form-control"
+                :class="{ 'form-control--error': fieldErrors.password2 }"
+                autocomplete="new-password"
+                @input="clearField('password2')"
+              />
+              <p v-if="fieldErrors.password2" class="field-error">{{ fieldErrors.password2 }}</p>
             </div>
           </div>
 
           <div class="form-actions">
-            <p v-if="auth.error" class="error-message">{{ auth.error }}</p>
-            <button type="submit" class="btn btn-dark" :disabled="auth.loading">
-              {{ auth.loading ? 'Creating...' : 'Create' }}
+            <button type="submit" class="btn btn-dark" :disabled="submitting || auth.loading">
+              {{ (submitting || auth.loading) ? 'Memproses...' : 'Create' }}
             </button>
           </div>
         </form>
       </div>
 
-      <img :src="paperPlaneSrc" alt="Paper plane decoration" class="paper-plane-deco" />
+      <img :src="paperPlaneSrc" alt="" aria-hidden="true" class="paper-plane-deco" />
     </main>
 
     <AppFooter :is-authenticated="isAuthenticated" :user="auth.user" @logout="logout" />
@@ -219,27 +408,6 @@ const paperPlaneSrc = getAssetUrl('15f47f71f80b6474e00a66edd9fef321a837f795.png'
 </template>
 
 <style scoped>
-/* Visually hide radios but tetap interaktif via label */
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-.radio-label {
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-
 .page-wrapper {
   max-width: 100%;
   margin: 0 auto;
@@ -271,11 +439,6 @@ const paperPlaneSrc = getAssetUrl('15f47f71f80b6474e00a66edd9fef321a837f795.png'
   transition: opacity 0.2s;
 }
 
-.btn-primary {
-  background-color: var(--primary-color, #009444);
-  color: var(--light-color, #ffffff);
-}
-
 .btn-dark {
   background-color: var(--dark-color, #000000);
   color: var(--light-color, #ffffff);
@@ -285,18 +448,10 @@ const paperPlaneSrc = getAssetUrl('15f47f71f80b6474e00a66edd9fef321a837f795.png'
   font-weight: 700;
 }
 
-.btn-dark:hover:not(:disabled) {
-  opacity: 0.8;
-}
+.btn-dark:hover:not(:disabled) { opacity: 0.8; }
+.btn-dark:disabled { opacity: 0.6; cursor: not-allowed; }
 
-.btn-dark:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.required-star {
-  color: red;
-}
+.required-star { color: red; }
 
 .account-section {
   position: relative;
@@ -398,41 +553,10 @@ const paperPlaneSrc = getAssetUrl('15f47f71f80b6474e00a66edd9fef321a837f795.png'
   font-family: 'Montserrat', sans-serif;
 }
 
-.gender-group {
-  display: flex !important;
-  flex-direction: row !important;
-  gap: 45px;
-  margin-bottom: 28px;
-  position: relative;
-  z-index: 4;
-}
-
-.radio-label {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 15px;
-  font-weight: 600;
-  cursor: pointer;
-  font-family: 'Montserrat', sans-serif;
-  user-select: none;
-}
-
-.radio-label:hover {
-  opacity: 0.8;
-}
-
-.radio-icon {
-  width: 18px;
-  height: 18px;
-  flex-shrink: 0;
-  pointer-events: none;
-}
-
 .form-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 28px 42px;
+  gap: 20px 42px;
 }
 
 .form-group {
@@ -441,9 +565,7 @@ const paperPlaneSrc = getAssetUrl('15f47f71f80b6474e00a66edd9fef321a837f795.png'
   gap: 5px;
 }
 
-.form-group.grid-full-width {
-  grid-column: 1 / -1;
-}
+.form-group.grid-full-width { grid-column: 1 / -1; }
 
 .form-group label {
   font-size: 12px;
@@ -454,7 +576,7 @@ const paperPlaneSrc = getAssetUrl('15f47f71f80b6474e00a66edd9fef321a837f795.png'
 
 .form-control {
   background-color: var(--input-bg, #d9d9d9);
-  border: none;
+  border: 2px solid transparent;
   border-radius: 9px;
   height: 47px;
   padding: 0 15px;
@@ -462,11 +584,33 @@ const paperPlaneSrc = getAssetUrl('15f47f71f80b6474e00a66edd9fef321a837f795.png'
   width: 100%;
   box-sizing: border-box;
   font-family: 'Montserrat', sans-serif;
+  transition: border-color 0.2s, background-color 0.2s;
 }
 
 .form-control:focus {
-  outline: 2px solid var(--primary-color, #009444);
-  outline-offset: 2px;
+  outline: none;
+  border-color: var(--primary-color, #009444);
+}
+
+.form-control--error {
+  border-color: #dc2626;
+  background-color: #fef2f2;
+}
+
+.field-error {
+  margin: 0;
+  color: #dc2626;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: 'Montserrat', sans-serif;
+}
+
+.field-hint {
+  margin: 0;
+  color: var(--text-gray, #808080);
+  font-size: 11.5px;
+  font-weight: 500;
+  font-family: 'Montserrat', sans-serif;
 }
 
 .input-wrapper {
@@ -488,10 +632,7 @@ const paperPlaneSrc = getAssetUrl('15f47f71f80b6474e00a66edd9fef321a837f795.png'
   pointer-events: none;
 }
 
-.verified-badge img {
-  width: 18px;
-  height: 18px;
-}
+.verified-badge img { width: 18px; height: 18px; }
 
 .country-code-badge {
   position: absolute;
@@ -510,38 +651,16 @@ const paperPlaneSrc = getAssetUrl('15f47f71f80b6474e00a66edd9fef321a837f795.png'
   pointer-events: none;
 }
 
-.country-code-badge img {
-  width: 18px;
-  height: 19px;
-}
+.country-code-badge img { width: 18px; height: 19px; }
 
-.phone-input {
-  padding-left: 85px;
-}
-
-.input-icon {
-  position: absolute;
-  right: 0;
-  top: 0;
-  height: 100%;
-  width: auto;
-  pointer-events: none;
-}
+.phone-input { padding-left: 85px; }
 
 .form-actions {
-  margin-top: 17px;
+  margin-top: 24px;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
   gap: 12px;
-}
-
-.error-message {
-  color: #ff0000;
-  font-size: 14px;
-  font-weight: 600;
-  margin: 0;
-  font-family: 'Montserrat', sans-serif;
 }
 
 .paper-plane-deco {
@@ -554,45 +673,18 @@ const paperPlaneSrc = getAssetUrl('15f47f71f80b6474e00a66edd9fef321a837f795.png'
 }
 
 @media (max-width: 1200px) {
-  .container {
-    padding-left: 40px;
-    padding-right: 40px;
-  }
-
-  .account-container {
-    flex-direction: column;
-    align-items: center;
-  }
-
-  .form-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .form-group.grid-full-width {
-    grid-column: auto;
-  }
-
-  .form-actions {
-    justify-content: center;
-  }
-
-  .paper-plane-deco {
-    display: none;
-  }
+  .container { padding-left: 40px; padding-right: 40px; }
+  .account-container { flex-direction: column; align-items: center; }
+  .form-grid { grid-template-columns: 1fr; }
+  .form-group.grid-full-width { grid-column: auto; }
+  .form-actions { align-items: stretch; }
+  .paper-plane-deco { display: none; }
 }
 
 @media (max-width: 768px) {
-  .container {
-    padding-left: 20px;
-    padding-right: 20px;
-  }
-
-  .gender-group {
-    gap: 24px;
-  }
-
-  .form-grid {
-    gap: 20px;
-  }
+  .container { padding-left: 20px; padding-right: 20px; }
+  .account-section { padding-top: 120px; }
+  .form-grid { gap: 16px; }
+  .btn-dark { width: 100%; }
 }
 </style>
